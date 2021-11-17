@@ -1,5 +1,7 @@
 # Tegra Linux Kernel for CyberDog
 
+[![License](https://img.shields.io/badge/License-GPL%202.0-brightgreen)](https://choosealicense.com/licenses/gpl-2.0/)
+
 ---
 ## **[简介]**
 
