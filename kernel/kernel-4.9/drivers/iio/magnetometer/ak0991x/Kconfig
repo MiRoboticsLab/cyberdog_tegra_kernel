@@ -1,0 +1,22 @@
+#
+# ak0991x Magnetometer sensors
+#
+
+config IIO_AKM_MAGN_AK0991X
+	tristate "Asahi Kasei AK0991X 3-Axis Magnetometer"
+	select IIO_BUFFER
+	select IIO_TRIGGERED_BUFFER
+	help
+	  Say yes here to build support for Asahi Kasei AK09911/AK09912 3-Axis Magnetometer.
+
+config IIO_AKM_MAGN_AK0991X_I2C
+	tristate "support I2C bus connection"
+	depends on IIO_AKM_MAGN_AK0991X && I2C
+	help
+	  Say y here is you have AK0991X hooked to an I2C bus.
+
+config IIO_AKM_MAGN_AK0991X_SPI
+	tristate "support SPI bus connection"
+	depends on IIO_AKM_MAGN_AK0991X && SPI
+	help
+	  Say y here if you have AK0991X hooked to an SPI bus.

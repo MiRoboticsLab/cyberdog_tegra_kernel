@@ -1,0 +1,26 @@
+name: "CI"
+
+on:
+  pull_request:
+    paths-ignore:
+      - 'tools/**'
+      - '**.md'
+  push:
+    paths-ignore:
+      - 'tools/**'
+      - '**.md'
+      
+jobs:
+  cross-build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-20.04]
+    steps:
+      - name: build
+        uses: actions/checkout@v2
+        run: |
+          cd kernel/kernel-4.9
+          source envsetup.sh
+          ./build.sh

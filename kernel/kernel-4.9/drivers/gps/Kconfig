@@ -1,0 +1,5 @@
+config XIAOMI_GPS_UART_DRIVER
+tristate "Xiaomi GPS uart Driver"
+        default y
+	help
+	  Support for XIAOMI GPS uart driver

@@ -1,0 +1,2884 @@
+/*
+ * rt5680.c  --  ALC5680 ALSA SoC audio codec driver
+ *
+ * Copyright 2015 Realtek Semiconductor Corp.
+ * Author: Oder Chiou <oder_chiou@realtek.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
+ */
+
+#include <linux/fs.h>
+#include <linux/module.h>
+#include <linux/moduleparam.h>
+#include <linux/init.h>
+#include <linux/delay.h>
+#include <linux/pm.h>
+#include <linux/regmap.h>
+#include <linux/i2c.h>
+#include <linux/spi/spi.h>
+#include <linux/platform_device.h>
+#include <linux/firmware.h>
+#include <linux/gpio.h>
+#include <linux/of_gpio.h>
+#include <sound/core.h>
+#include <sound/pcm.h>
+#include <sound/pcm_params.h>
+#include <sound/soc.h>
+#include <sound/soc-dapm.h>
+#include <sound/initval.h>
+#include <sound/tlv.h>
+#include <sound/jack.h>
+
+#include "rt5680.h"
+
+#define VERSION "simple"
+
+static struct reg_sequence rt5680_init_list[] = {
+	{ RT5680_MCLK_GATING_CTRL,	0x0001 },
+	{ RT5680_AUTO_RC_CLK_CTRL1,	0x4000 },
+	{ RT5680_PR_REG_VREF_CTRL1,	0x0853 },
+	{ RT5680_LDO8_LDO9_PR_CTRL,	0x0F07 },
+	{ RT5680_DMIC_CTRL1,		0xE550 },
+	{ RT5680_MF_PIN_CTRL1,		0xB419 },
+	{ RT5680_MF_PIN_CTRL3,		0x5500 },
+	{ RT5680_CLK_TREE_CTRL1,	0x0011 },
+	{ RT5680_CLK_TREE_CTRL3,	0x0010 },
+	{ RT5680_I2S1_SDP,		    0x8002 },
+};
+
+static const struct reg_default rt5680_reg[] = {
+	{0x0000, 0x0000},
+	{0x0001, 0x8080},
+	{0x0003, 0x0000},
+	{0x0005, 0x0000},
+	{0x0007, 0x0000},
+	{0x0008, 0x0000},
+	{0x0009, 0x0005},
+	{0x000a, 0x5455},
+	{0x0010, 0x0091},
+	{0x0011, 0x0000},
+	{0x0014, 0x5757},
+	{0x0015, 0xafaf},
+	{0x0016, 0xafaf},
+	{0x0017, 0xafaf},
+	{0x001a, 0x2f2f},
+	{0x001b, 0x2f2f},
+	{0x001c, 0x2f2f},
+	{0x001d, 0x2f2f},
+	{0x0020, 0x0000},
+	{0x0021, 0x0000},
+	{0x0022, 0x0000},
+	{0x0028, 0x6000},
+	{0x002a, 0x0000},
+	{0x002b, 0x0000},
+	{0x002c, 0x0000},
+	{0x0030, 0x00f0},
+	{0x0031, 0x0000},
+	{0x0032, 0x0000},
+	{0x0033, 0x0000},
+	{0x0034, 0x0123},
+	{0x0035, 0x4567},
+	{0x0036, 0x8003},
+	{0x0038, 0x00f0},
+	{0x0039, 0x0000},
+	{0x003a, 0x0000},
+	{0x003b, 0x0000},
+	{0x003c, 0x0123},
+	{0x003d, 0x4567},
+	{0x003e, 0x8003},
+	{0x0040, 0xcaaa},
+	{0x0041, 0xaa00},
+	{0x0042, 0xcaaa},
+	{0x0043, 0xaa00},
+	{0x0044, 0xaaaa},
+	{0x0045, 0xaa00},
+	{0x0046, 0xb080},
+	{0x0047, 0x0000},
+	{0x0048, 0x0000},
+	{0x0049, 0x0000},
+	{0x004a, 0xc0c0},
+	{0x004b, 0xc0c0},
+	{0x004c, 0x0000},
+	{0x004d, 0xc0c0},
+	{0x004e, 0xc0c0},
+	{0x0050, 0x0550},
+	{0x0051, 0x0055},
+	{0x0053, 0x1e00},
+	{0x0055, 0x0009},
+	{0x0060, 0x0000},
+	{0x0061, 0x0000},
+	{0x0062, 0x0000},
+	{0x0063, 0x0040},
+	{0x0064, 0x0000},
+	{0x0065, 0x0181},
+	{0x0066, 0x0000},
+	{0x0067, 0x0002},
+	{0x0068, 0x3703},
+	{0x0069, 0x0100},
+	{0x006a, 0x0000},
+	{0x0070, 0x8000},
+	{0x0071, 0x8000},
+	{0x0072, 0x8000},
+	{0x0073, 0x8000},
+	{0x0074, 0x8000},
+	{0x0075, 0x0000},
+	{0x0076, 0x7777},
+	{0x0077, 0x7777},
+	{0x0078, 0x7000},
+	{0x0079, 0x3000},
+	{0x007a, 0x0000},
+	{0x007b, 0x0000},
+	{0x007c, 0x0000},
+	{0x007d, 0x0000},
+	{0x007e, 0x0111},
+	{0x007f, 0x0333},
+	{0x0080, 0x0000},
+	{0x0081, 0x0000},
+	{0x0083, 0x0000},
+	{0x0084, 0x0000},
+	{0x0085, 0x0000},
+	{0x0086, 0x0000},
+	{0x0087, 0x0000},
+	{0x0088, 0x0000},
+	{0x0089, 0x0000},
+	{0x008a, 0x0000},
+	{0x008b, 0x0000},
+	{0x008c, 0x0000},
+	{0x008d, 0x0000},
+	{0x008e, 0x0008},
+	{0x008f, 0x0000},
+	{0x0090, 0x0000},
+	{0x0091, 0x0000},
+	{0x0092, 0x0000},
+	{0x0093, 0x0000},
+	{0x0094, 0x0000},
+	{0x0095, 0x0000},
+	{0x0096, 0x0000},
+	{0x0097, 0x0000},
+	{0x0098, 0x0000},
+	{0x0099, 0x0000},
+	{0x009a, 0x0000},
+	{0x009b, 0x000c},
+	{0x009c, 0x0002},
+	{0x009d, 0x0001},
+	{0x00a0, 0x7080},
+	{0x00a1, 0x4a00},
+	{0x00a2, 0x4e01},
+	{0x00a3, 0xa000},
+	{0x00b0, 0x0000},
+	{0x00b1, 0x0000},
+	{0x00b2, 0x0000},
+	{0x00b3, 0x0000},
+	{0x00b4, 0x0000},
+	{0x00b5, 0x0000},
+	{0x00b6, 0x0000},
+	{0x00b7, 0x0000},
+	{0x00b8, 0x0000},
+	{0x00b9, 0x0000},
+	{0x00ba, 0x0000},
+	{0x00bb, 0x0000},
+	{0x00bc, 0x0000},
+	{0x00bd, 0x0000},
+	{0x00be, 0x0000},
+	{0x00bf, 0x0000},
+	{0x00c0, 0x2008},
+	{0x00c1, 0x8600},
+	{0x00c2, 0x0000},
+	{0x00c3, 0x0000},
+	{0x00c4, 0x0000},
+	{0x00c5, 0x0000},
+	{0x00c6, 0x0000},
+	{0x00c7, 0x0000},
+	{0x00c8, 0x0000},
+	{0x00c9, 0x0000},
+	{0x00ca, 0x0000},
+	{0x00cf, 0x0300},
+	{0x00d0, 0xb320},
+	{0x00d1, 0x0000},
+	{0x00d2, 0xb300},
+	{0x00d3, 0x0000},
+	{0x00d4, 0xb300},
+	{0x00d5, 0x0000},
+	{0x00d6, 0xb300},
+	{0x00d7, 0x0000},
+	{0x00da, 0x0000},
+	{0x00db, 0x0008},
+	{0x00dc, 0x00c0},
+	{0x00dd, 0x6724},
+	{0x00de, 0x3131},
+	{0x00df, 0x0008},
+	{0x00e0, 0x4000},
+	{0x00e1, 0x3131},
+	{0x00e4, 0x402c},
+	{0x00f7, 0xf8f8},
+	{0x00f8, 0xf8f8},
+	{0x00f9, 0xf8f8},
+	{0x00fa, 0x0000},
+	{0x00fd, 0x0000},
+	{0x00fe, 0x10ec},
+	{0x00ff, 0x6385},
+	{0x0100, 0xc0c0},
+	{0x0101, 0x0000},
+	{0x0102, 0x0000},
+	{0x0103, 0x0000},
+	{0x0104, 0x0000},
+	{0x0105, 0x0000},
+	{0x0106, 0x0000},
+	{0x0107, 0x0000},
+	{0x0108, 0x0000},
+	{0x0109, 0x0000},
+	{0x010a, 0x0000},
+	{0x0112, 0xe400},
+	{0x011a, 0x000b},
+	{0x011d, 0x0000},
+	{0x0120, 0x1d22},
+	{0x0121, 0x0003},
+	{0x0122, 0x0003},
+	{0x0123, 0x0020},
+	{0x0124, 0x0080},
+	{0x0125, 0x0800},
+	{0x0126, 0x0000},
+	{0x0127, 0x0000},
+	{0x0128, 0x0000},
+	{0x0129, 0x0000},
+	{0x012a, 0x1d1f},
+	{0x012b, 0x0000},
+	{0x012c, 0x0020},
+	{0x012d, 0x0080},
+	{0x012e, 0x0800},
+	{0x012f, 0x0000},
+	{0x0130, 0x0000},
+	{0x013a, 0x0000},
+	{0x013b, 0x0000},
+	{0x013c, 0x0000},
+	{0x0150, 0x4131},
+	{0x0151, 0x4131},
+	{0x0152, 0x4131},
+	{0x0153, 0x4131},
+	{0x0154, 0x4131},
+	{0x0155, 0x0000},
+	{0x0156, 0x0000},
+	{0x0157, 0x0000},
+	{0x0158, 0x0000},
+	{0x0159, 0x0000},
+	{0x015a, 0x0000},
+	{0x015b, 0x0000},
+	{0x015c, 0x0000},
+	{0x0160, 0x6000},
+	{0x0161, 0x0000},
+	{0x0164, 0xc000},
+	{0x0165, 0x0000},
+	{0x0166, 0x0000},
+	{0x0167, 0x0000},
+	{0x0170, 0x0000},
+	{0x0171, 0x0000},
+	{0x0172, 0x0000},
+	{0x0173, 0x0002},
+	{0x0174, 0x0001},
+	{0x0175, 0x0002},
+	{0x0176, 0x0001},
+	{0x0177, 0x0002},
+	{0x0178, 0x0001},
+	{0x0179, 0x0002},
+	{0x017a, 0x0001},
+	{0x017b, 0x0002},
+	{0x017c, 0x0001},
+	{0x0180, 0x4b38},
+	{0x0181, 0x0000},
+	{0x0182, 0x0000},
+	{0x0183, 0x0030},
+	{0x0192, 0x882f},
+	{0x0193, 0x0000},
+	{0x0194, 0x0700},
+	{0x0195, 0x0242},
+	{0x0196, 0x0e22},
+	{0x0197, 0x0001},
+	{0x019a, 0x0000},
+	{0x019b, 0x0000},
+	{0x01a0, 0x433d},
+	{0x01a1, 0x02a0},
+	{0x01a2, 0x0000},
+	{0x01a3, 0x0000},
+	{0x01a4, 0x0000},
+	{0x01a5, 0x0009},
+	{0x01a6, 0x0018},
+	{0x01a7, 0x002a},
+	{0x01a8, 0x004c},
+	{0x01a9, 0x0097},
+	{0x01aa, 0x01c3},
+	{0x01ab, 0x03e9},
+	{0x01ac, 0x1389},
+	{0x01ad, 0xc351},
+	{0x01ae, 0x0000},
+	{0x01af, 0x0000},
+	{0x01b0, 0x0000},
+	{0x01b1, 0x0000},
+	{0x01b3, 0x40af},
+	{0x01b4, 0x0702},
+	{0x01b5, 0x0000},
+	{0x01b6, 0x0000},
+	{0x01b7, 0x5757},
+	{0x01b8, 0x5757},
+	{0x01b9, 0x5757},
+	{0x01ba, 0x5757},
+	{0x01bb, 0x5757},
+	{0x01bc, 0x5757},
+	{0x01bd, 0x5757},
+	{0x01be, 0x5757},
+	{0x01bf, 0x5757},
+	{0x01c0, 0x5757},
+	{0x01c1, 0x003c},
+	{0x01c2, 0x5757},
+	{0x01c3, 0x0000},
+	{0x01d0, 0x5334},
+	{0x01d1, 0x18e0},
+	{0x01d2, 0x8728},
+	{0x01d3, 0x7418},
+	{0x01d4, 0x901f},
+	{0x01d5, 0x4500},
+	{0x01d6, 0x5100},
+	{0x01d7, 0x0000},
+	{0x01d8, 0x0000},
+	{0x01d9, 0x0000},
+	{0x01da, 0x0501},
+	{0x01e0, 0x0111},
+	{0x01e1, 0x0064},
+	{0x01e2, 0xef0e},
+	{0x01e3, 0xf0f0},
+	{0x01e4, 0xef0e},
+	{0x01e5, 0xf0f0},
+	{0x01e6, 0xef0e},
+	{0x01e7, 0xf0f0},
+	{0x01e8, 0xf000},
+	{0x01e9, 0x0000},
+	{0x01f0, 0x0000},
+	{0x01f1, 0x0000},
+	{0x01f2, 0x0000},
+	{0x0200, 0x1c10},
+	{0x0201, 0x01f4},
+	{0x0202, 0x1c10},
+	{0x0203, 0x01f4},
+	{0x0204, 0x1c10},
+	{0x0205, 0x01f4},
+	{0x0206, 0x1c10},
+	{0x0207, 0x01f4},
+	{0x0208, 0xc882},
+	{0x0209, 0x1c10},
+	{0x020a, 0x01f4},
+	{0x020b, 0xc882},
+	{0x020c, 0x1c10},
+	{0x020d, 0x01f4},
+	{0x020e, 0xc882},
+	{0x020f, 0x1c10},
+	{0x0210, 0x01f4},
+	{0x0211, 0xc882},
+	{0x0212, 0x1c10},
+	{0x0213, 0x01f4},
+	{0x0214, 0xe904},
+	{0x0215, 0x1c10},
+	{0x0216, 0x01f4},
+	{0x0217, 0xe904},
+	{0x0218, 0x1c10},
+	{0x0219, 0x01f4},
+	{0x021a, 0xe904},
+	{0x021b, 0x1c10},
+	{0x021c, 0x01f4},
+	{0x021d, 0xe904},
+	{0x021e, 0x1c10},
+	{0x021f, 0x01f4},
+	{0x0220, 0xe904},
+	{0x0221, 0x1c10},
+	{0x0222, 0x01f4},
+	{0x0223, 0xe904},
+	{0x0224, 0x1c10},
+	{0x0225, 0x01f4},
+	{0x0226, 0x1c10},
+	{0x0227, 0x01f4},
+	{0x0228, 0x1c10},
+	{0x0229, 0x01f4},
+	{0x022a, 0x2000},
+	{0x022b, 0x0000},
+	{0x022c, 0x2000},
+	{0x022d, 0x2000},
+	{0x022e, 0x0000},
+	{0x022f, 0x2000},
+	{0x0230, 0x1c10},
+	{0x0231, 0x01f4},
+	{0x0232, 0x1c10},
+	{0x0233, 0x01f4},
+	{0x0234, 0x0200},
+	{0x0235, 0x0000},
+	{0x0236, 0x0000},
+	{0x0237, 0x0000},
+	{0x0238, 0x0000},
+	{0x0239, 0x0000},
+	{0x023a, 0x0000},
+	{0x023b, 0x0000},
+	{0x023c, 0x0000},
+	{0x023d, 0x0000},
+	{0x023e, 0x0200},
+	{0x023f, 0x0000},
+	{0x0240, 0x0000},
+	{0x0241, 0x0000},
+	{0x0242, 0x0000},
+	{0x0243, 0x0000},
+	{0x0244, 0x0000},
+	{0x0245, 0x0000},
+	{0x0246, 0x0000},
+	{0x0247, 0x0000},
+	{0x0248, 0x0800},
+	{0x0249, 0x0800},
+	{0x024a, 0x0800},
+	{0x024b, 0x0800},
+	{0x024c, 0x1c10},
+	{0x024d, 0x01f4},
+	{0x024e, 0x1c10},
+	{0x024f, 0x01f4},
+	{0x0250, 0xe904},
+	{0x0251, 0x1c10},
+	{0x0252, 0x01f4},
+	{0x0253, 0xe904},
+	{0x0254, 0x1c10},
+	{0x0255, 0x01f4},
+	{0x0256, 0xe904},
+	{0x0257, 0x1c10},
+	{0x0258, 0x01f4},
+	{0x0259, 0xe904},
+	{0x025a, 0x1c10},
+	{0x025b, 0x01f4},
+	{0x025c, 0xe904},
+	{0x025d, 0x1c10},
+	{0x025e, 0x01f4},
+	{0x025f, 0xe904},
+	{0x0260, 0x1c10},
+	{0x0261, 0x01f4},
+	{0x0262, 0xe904},
+	{0x0263, 0x1c10},
+	{0x0264, 0x01f4},
+	{0x0265, 0xe904},
+	{0x0266, 0x1c10},
+	{0x0267, 0x01f4},
+	{0x0268, 0x1c10},
+	{0x0269, 0x01f4},
+	{0x026a, 0x1c10},
+	{0x026b, 0x01f4},
+	{0x026c, 0x0800},
+	{0x026d, 0x0800},
+	{0x026e, 0x0800},
+	{0x026f, 0x0800},
+	{0x0280, 0x7681},
+	{0x0281, 0x0020},
+	{0x0282, 0x7851},
+	{0x0283, 0x01f3},
+	{0x0284, 0x00fa},
+	{0x0285, 0x0129},
+	{0x0286, 0x0602},
+	{0x0287, 0x0114},
+	{0x0288, 0x0010},
+	{0x0289, 0x0000},
+	{0x028a, 0x120d},
+	{0x028b, 0x0040},
+	{0x028c, 0x0040},
+	{0x028d, 0x0505},
+	{0x028e, 0x1322},
+	{0x028f, 0x2110},
+	{0x0290, 0x3040},
+	{0x0291, 0x6414},
+	{0x0292, 0x2000},
+	{0x0293, 0x0000},
+	{0x0294, 0x0000},
+	{0x0295, 0x0000},
+	{0x0296, 0x0000},
+	{0x02a0, 0x4089},
+	{0x02a1, 0x0000},
+	{0x02a2, 0x0008},
+	{0x02a3, 0x0010},
+	{0x02a4, 0x0596},
+	{0x02a5, 0x0506},
+	{0x02a6, 0x0806},
+	{0x02a7, 0x1a00},
+	{0x02a8, 0x0705},
+	{0x02a9, 0x052d},
+	{0x02aa, 0x180d},
+	{0x02ab, 0x0009},
+	{0x02ac, 0x140a},
+	{0x02ad, 0x0e4b},
+	{0x02ae, 0x0000},
+	{0x02b0, 0x0000},
+	{0x02b1, 0x0000},
+	{0x02b2, 0x8060},
+	{0x02b3, 0x0040},
+	{0x02b4, 0x0001},
+	{0x02b5, 0x0001},
+	{0x02b6, 0x0400},
+	{0x02b7, 0x0000},
+	{0x02b8, 0x0000},
+	{0x02b9, 0x4022},
+	{0x02ba, 0x0002},
+	{0x02bb, 0x0000},
+	{0x02bc, 0x0000},
+	{0x02bd, 0x0000},
+	{0x02c5, 0x802c},
+	{0x02d0, 0x7fff},
+	{0x02d1, 0x0000},
+	{0x02d2, 0x0000},
+	{0x02d3, 0x006a},
+	{0x02d4, 0x0000},
+	{0x02d5, 0x0000},
+	{0x02d6, 0x0000},
+	{0x02e0, 0x6000},
+	{0x02e1, 0x4040},
+	{0x02e2, 0x4000},
+	{0x02e3, 0x0000},
+	{0x02e4, 0xc350},
+	{0x02e5, 0x0064},
+	{0x02e6, 0x0040},
+	{0x02e7, 0x0000},
+	{0x02e8, 0x5280},
+	{0x02e9, 0x0001},
+	{0x02ea, 0x86a0},
+	{0x02eb, 0x0fd3},
+	{0x0300, 0x3c10},
+	{0x0301, 0x7dc2},
+	{0x0302, 0xa178},
+	{0x0303, 0x5383},
+	{0x0304, 0x003e},
+	{0x0305, 0x02c1},
+	{0x0306, 0xd37d},
+	{0x0307, 0x68d3},
+	{0x0308, 0x82f6},
+	{0x0309, 0xcd3b},
+	{0x030a, 0x0035},
+	{0x030b, 0xebf4},
+	{0x030c, 0x2d6e},
+	{0x0310, 0x5254},
+	{0x0311, 0x0300},
+	{0x0312, 0x5f5f},
+	{0x0313, 0x133e},
+	{0x0314, 0x32ff},
+	{0x0315, 0x040c},
+	{0x0316, 0x7418},
+	{0x0317, 0x1800},
+	{0x0318, 0x0000},
+	{0x0319, 0x0045},
+	{0x031a, 0x0000},
+	{0x031b, 0x0000},
+	{0x0320, 0x5254},
+	{0x0321, 0x0300},
+	{0x0322, 0x5f5f},
+	{0x0323, 0x133e},
+	{0x0324, 0x32ff},
+	{0x0325, 0x040c},
+	{0x0326, 0x7418},
+	{0x0327, 0x1800},
+	{0x0328, 0x0000},
+	{0x0329, 0x0045},
+	{0x032a, 0x0000},
+	{0x032b, 0x0000},
+	{0x0330, 0x5254},
+	{0x0331, 0x0300},
+	{0x0332, 0x5f5f},
+	{0x0333, 0x133e},
+	{0x0334, 0x32ff},
+	{0x0335, 0x040c},
+	{0x0336, 0x7418},
+	{0x0337, 0x1800},
+	{0x0338, 0x0000},
+	{0x0339, 0x0045},
+	{0x033a, 0x0000},
+	{0x033b, 0x0000},
+	{0x0340, 0x4951},
+	{0x0341, 0x1860},
+	{0x0342, 0x5f5f},
+	{0x0343, 0x0032},
+	{0x0344, 0x0450},
+	{0x0345, 0x00ff},
+	{0x0346, 0x040c},
+	{0x0347, 0x7418},
+	{0x0348, 0x0000},
+	{0x0349, 0x8596},
+	{0x034a, 0x0075},
+	{0x034b, 0x0080},
+	{0x034c, 0x0000},
+	{0x034d, 0x0000},
+	{0x034e, 0x0000},
+	{0x0350, 0x4905},
+	{0x0351, 0xe150},
+	{0x0352, 0x0100},
+	{0x0353, 0x5f5f},
+	{0x0354, 0x0603},
+	{0x0355, 0x0022},
+	{0x0356, 0x45ff},
+	{0x0357, 0x040c},
+	{0x0358, 0x7418},
+	{0x0359, 0x0000},
+	{0x035a, 0x0000},
+	{0x035b, 0x8700},
+	{0x035c, 0x5080},
+	{0x035d, 0x0000},
+	{0x035e, 0x0000},
+	{0x035f, 0x0000},
+	{0x0400, 0x7f08},
+	{0x0401, 0x0030},
+	{0x0402, 0x0000},
+	{0x0403, 0x0261},
+	{0x0404, 0x1c3c},
+	{0x0405, 0x0000},
+	{0x0406, 0x0000},
+	{0x0407, 0x0000},
+	{0x0408, 0x0000},
+	{0x0409, 0x0000},
+	{0x040a, 0x0000},
+	{0x040b, 0x0000},
+	{0x040c, 0x0000},
+	{0x040d, 0x0000},
+	{0x040e, 0x0000},
+	{0x040f, 0x0000},
+	{0x0410, 0x0000},
+	{0x0411, 0x0000},
+	{0x0412, 0x0000},
+	{0x0413, 0x0000},
+	{0x0414, 0x0000},
+	{0x0415, 0x0000},
+	{0x0416, 0x0000},
+	{0x0417, 0x0000},
+	{0x0418, 0x0000},
+	{0x0420, 0x7914},
+	{0x0421, 0x0261},
+	{0x0422, 0x6000},
+	{0x0423, 0x0000},
+	{0x0424, 0x0000},
+	{0x0425, 0x0000},
+	{0x0426, 0x0000},
+	{0x0427, 0x0000},
+	{0x0428, 0x0000},
+	{0x0429, 0x0000},
+	{0x0500, 0x0000},
+	{0x0501, 0x0000},
+	{0x0502, 0x0000},
+	{0x0503, 0x2f2f},
+	{0x0504, 0x2f2f},
+	{0x0505, 0x2f2f},
+	{0x0506, 0x2f2f},
+	{0x0507, 0x2f2f},
+	{0x0508, 0x1800},
+	{0x0509, 0x0000},
+	{0x050a, 0x0000},
+	{0x050b, 0x0800},
+	{0x050c, 0x1800},
+	{0x050d, 0x0000},
+	{0x050e, 0x0000},
+	{0x050f, 0x0800},
+	{0x0510, 0x1800},
+	{0x0511, 0x0000},
+	{0x0512, 0x0000},
+	{0x0513, 0x0800},
+	{0x0514, 0x1800},
+	{0x0515, 0x0000},
+	{0x0516, 0x0000},
+	{0x0517, 0x0800},
+	{0x0518, 0x1800},
+	{0x0519, 0x0000},
+	{0x051a, 0x0000},
+	{0x051b, 0x0800},
+	{0x0520, 0x0041},
+	{0x0530, 0x0000},
+	{0x0540, 0x0000},
+	{0x0541, 0x0000},
+	{0x0542, 0x0000},
+	{0x0543, 0x0000},
+	{0x0544, 0x0000},
+	{0x0545, 0x0000},
+	{0x0546, 0x0000},
+	{0x0547, 0x0000},
+	{0x0548, 0x0000},
+	{0x0549, 0x0000},
+	{0x054a, 0x0000},
+	{0x0550, 0x0000},
+	{0x0551, 0x0000},
+	{0x0552, 0x0000},
+	{0x0553, 0x0000},
+	{0x0554, 0x0000},
+	{0x0555, 0x0000},
+	{0x0556, 0x0000},
+	{0x0557, 0x0000},
+	{0x0558, 0x0000},
+	{0x0559, 0x0000},
+	{0x055a, 0x0000},
+	{0x055b, 0x0000},
+	{0x055c, 0x0000},
+	{0x055d, 0x0000},
+	{0x055e, 0x0000},
+	{0x055f, 0x0000},
+	{0x0560, 0x0000},
+	{0x0561, 0x0000},
+	{0x0562, 0x0000},
+	{0x0563, 0x0000},
+	{0x0564, 0x0000},
+	{0x0565, 0x0000},
+	{0x0566, 0x0000},
+	{0x0567, 0x0000},
+	{0x0568, 0x0000},
+	{0x0569, 0x0000},
+	{0x056a, 0x0000},
+	{0x056b, 0x0000},
+	{0x056c, 0x0000},
+	{0x0600, 0x8a69},
+	{0x0601, 0xaa66},
+	{0x0602, 0x00aa},
+	{0x0603, 0x0666},
+	{0x0604, 0xaaa6},
+	{0x0605, 0xaaaa},
+	{0x0606, 0xaaaa},
+	{0x0607, 0xa666},
+	{0x0608, 0x4000},
+	{0x0609, 0x4444},
+	{0x060a, 0x4444},
+	{0x060b, 0x4444},
+	{0x060c, 0x4444},
+	{0x060d, 0xa860},
+	{0x0610, 0xa490},
+	{0x0611, 0xa490},
+	{0x0612, 0x0410},
+	{0x0613, 0x0000},
+	{0x0614, 0xa490},
+	{0x0619, 0x3303},
+	{0x061a, 0x0054},
+	{0x061b, 0x3303},
+	{0x061c, 0x0054},
+	{0x061d, 0x045f},
+	{0x061e, 0x081f},
+	{0x0620, 0x0095},
+	{0x0621, 0x0095},
+	{0x0622, 0x0095},
+	{0x0622, 0x0095},
+	{0x0636, 0xaaa0},
+	{0x0637, 0xaaaa},
+	{0x063c, 0x0000},
+	{0x063d, 0x0000},
+	{0x063e, 0x0000},
+	{0x063f, 0x0003},
+	{0x0640, 0x0000},
+	{0x0641, 0x0000},
+	{0x0642, 0x0000},
+	{0x0643, 0x0000},
+	{0x0644, 0x0000},
+	{0x0652, 0x3002},
+	{0x0653, 0x0000},
+	{0x0654, 0x0000},
+	{0x0655, 0x0000},
+	{0x0656, 0x0000},
+	{0x0657, 0x0000},
+	{0x0660, 0x0010},
+	{0x0661, 0x0010},
+	{0x0662, 0x0010},
+	{0x0663, 0x0010},
+	{0x0664, 0x0010},
+	{0x0665, 0x0000},
+	{0x0670, 0x0000},
+	{0x0671, 0x30c2},
+	{0x0672, 0x0803},
+	{0x0673, 0xaaaa},
+	{0x0674, 0x1100},
+	{0x0675, 0x0a54},
+	{0x0680, 0x0000},
+	{0x0681, 0x0002},
+	{0x0682, 0x0002},
+	{0x0683, 0x0000},
+	{0x0684, 0x0114},
+	{0x0689, 0x0010},
+	{0x068a, 0x0210},
+	{0x068c, 0x0067},
+	{0x068d, 0x0711},
+	{0x068f, 0x1024},
+	{0x0690, 0x1024},
+	{0x0700, 0x0000},
+	{0x0701, 0x0000},
+	{0x0702, 0x0000},
+	{0x0710, 0x0055},
+	{0x07f0, 0x0020},
+	{0x07f1, 0x0000},
+	{0x07f2, 0x0000},
+	{0x07f3, 0x0000},
+};
+
+/**
+ * rt5680_dsp_mode_i2c_write_addr - Write value to address on DSP mode.
+ * @rt5680: Private Data.
+ * @addr: Address index.
+ * @value: Address data.
+ *
+ *
+ * Returns 0 for success or negative error code.
+ */
+static int rt5680_dsp_mode_i2c_write_addr(struct rt5680_priv *rt5680,
+		unsigned int addr, unsigned int value, unsigned int opcode)
+{
+	struct snd_soc_codec *codec = rt5680->codec;
+	int ret;
+
+	mutex_lock(&rt5680->dsp_lock);
+
+	ret = regmap_write(rt5680->regmap_physical, RT5680_DSP_I2C_ADDR_MSB,
+		addr >> 16);
+	if (ret < 0) {
+		dev_err(codec->dev, "Failed to set addr msb value: %d\n", ret);
+		goto err;
+	}
+
+	ret = regmap_write(rt5680->regmap_physical, RT5680_DSP_I2C_ADDR_LSB,
+		addr & 0xffff);
+	if (ret < 0) {
+		dev_err(codec->dev, "Failed to set addr lsb value: %d\n", ret);
+		goto err;
+	}
+
+	ret = regmap_write(rt5680->regmap_physical, RT5680_DSP_I2C_DATA_MSB,
+		value >> 16);
+	if (ret < 0) {
+		dev_err(codec->dev, "Failed to set data msb value: %d\n", ret);
+		goto err;
+	}
+
+	ret = regmap_write(rt5680->regmap_physical, RT5680_DSP_I2C_DATA_LSB,
+		value & 0xffff);
+	if (ret < 0) {
+		dev_err(codec->dev, "Failed to set data lsb value: %d\n", ret);
+		goto err;
+	}
+
+	ret = regmap_write(rt5680->regmap_physical, RT5680_DSP_I2C_OP_CODE,
+		opcode);
+	if (ret < 0) {
+		dev_err(codec->dev, "Failed to set op code value: %d\n", ret);
+		goto err;
+	}
+
+err:
+	mutex_unlock(&rt5680->dsp_lock);
+
+	return ret;
+}
+
+/**
+ * rt5680_dsp_mode_i2c_read_addr - Read value from address on DSP mode.
+ * rt5680: Private Data.
+ * @addr: Address index.
+ * @value: Address data.
+ *
+ *
+ * Returns 0 for success or negative error code.
+ */
+static int rt5680_dsp_mode_i2c_read_addr(
+	struct rt5680_priv *rt5680, unsigned int addr, unsigned int *value)
+{
+	struct snd_soc_codec *codec = rt5680->codec;
+	int ret;
+	unsigned int msb, lsb;
+
+	mutex_lock(&rt5680->dsp_lock);
+
+	ret = regmap_write(rt5680->regmap_physical, RT5680_DSP_I2C_ADDR_MSB,
+		addr >> 16);
+	if (ret < 0) {
+		dev_err(codec->dev, "Failed to set addr msb value: %d\n", ret);
+		goto err;
+	}
+
+	ret = regmap_write(rt5680->regmap_physical, RT5680_DSP_I2C_ADDR_LSB,
+		addr & 0xffff);
+	if (ret < 0) {
+		dev_err(codec->dev, "Failed to set addr lsb value: %d\n", ret);
+		goto err;
+	}
+
+	ret = regmap_write(rt5680->regmap_physical, RT5680_DSP_I2C_OP_CODE,
+		0x0002);
+	if (ret < 0) {
+		dev_err(codec->dev, "Failed to set op code value: %d\n", ret);
+		goto err;
+	}
+
+	regmap_read(rt5680->regmap_physical, RT5680_DSP_I2C_DATA_MSB, &msb);
+	regmap_read(rt5680->regmap_physical, RT5680_DSP_I2C_DATA_LSB, &lsb);
+	*value = (msb << 16) | lsb;
+
+err:
+	mutex_unlock(&rt5680->dsp_lock);
+
+	return ret;
+}
+
+/**
+ * rt5680_dsp_mode_i2c_write - Write register on DSP mode.
+ * rt5680: Private Data.
+ * @reg: Register index.
+ * @value: Register data.
+ *
+ *
+ * Returns 0 for success or negative error code.
+ */
+static int rt5680_dsp_mode_i2c_write(struct rt5680_priv *rt5680,
+		unsigned int reg, unsigned int value)
+{
+	return rt5680_dsp_mode_i2c_write_addr(rt5680, 0x1800c000 + reg * 2,
+		value << 16 | value, 0x1);
+}
+
+/**
+ * rt5680_dsp_mode_i2c_read - Read register on DSP mode.
+ * @codec: SoC audio codec device.
+ * @reg: Register index.
+ * @value: Register data.
+ *
+ *
+ * Returns 0 for success or negative error code.
+ */
+static int rt5680_dsp_mode_i2c_read(
+	struct rt5680_priv *rt5680, unsigned int reg, unsigned int *value)
+{
+	int ret = rt5680_dsp_mode_i2c_read_addr(rt5680, 0x1800c000 + reg * 2,
+		value);
+
+	*value &= 0xffff;
+
+	return ret;
+}
+
+static bool rt5680_volatile_register(struct device *dev, unsigned int reg)
+{
+	switch (reg) {
+	case RT5680_RESET:
+	case RT5680_SPDIF_IN_CTRL:
+	case RT5680_FRAC_DIV_CTRL2:
+	case RT5680_JACK_MIC_DET_CTRL2:
+	case RT5680_JACK_MIC_DET_CTRL4:
+	case RT5680_IRQ_ST1:
+	case RT5680_IRQ_ST2:
+	case RT5680_GPIO_ST1:
+ 	case RT5680_GPIO_ST2:
+  	case RT5680_IL_CMD1:
+  	case RT5680_4BTN_IL_CMD1:
+  	case RT5680_PS_IL_CMD1:
+  	case RT5680_VENDOR_ID:
+  	case RT5680_VENDOR_ID1:
+  	case RT5680_VENDOR_ID2:
+  	case RT5680_PDM1_CTRL1:
+  	case RT5680_PDM1_CTRL2:
+  	case RT5680_PDM1_CTRL5:
+  	case RT5680_PDM2_CTRL1:
+  	case RT5680_PDM2_CTRL2:
+  	case RT5680_PDM2_CTRL5:
+  	case RT5680_MCLK_DET_PROTECT_CTRL:
+  	case RT5680_STO_HP_NG2_ST1 ... RT5680_STO_HP_NG2_ST3:
+	case RT5680_MONO_AMP_NG2_ST1:
+	case RT5680_MONO_AMP_NG2_ST2:
+	case RT5680_IF_INPUT_DET_ST1 ... RT5680_IF_INPUT_DET_ST3:
+	case RT5680_STO_DAC_SIL_DET_CTRL ... RT5680_DD_MIXERR_SIL_DET_CTRL:
+	case RT5680_ADC_EQ_CTRL1:
+	case RT5680_DAC_EQ_CTRL1:
+	case RT5680_DAC_EQ_CTRL2:
+	case RT5680_I2S_MASTER_CLK_CTRL5:
+	case RT5680_I2S_MASTER_CLK_CTRL7:
+	case RT5680_I2S_MASTER_CLK_CTRL9:
+	case RT5680_I2S_MASTER_CLK_CTRL11:
+	case RT5680_I2S_MASTER_CLK_CTRL13:
+	case RT5680_VAD_CLK_SETTING1:
+	case RT5680_VAD_ADC_PLL3_CTRL2:
+	case RT5680_HP_IMP_SENS_CTRL1:
+	case RT5680_HP_IMP_SENS_CTRL3 ... RT5680_HP_IMP_SENS_CTRL5:
+	case RT5680_HP_IMP_SENS_DIG_CTRL2:
+	case RT5680_HP_IMP_SENS_DIG_CTRL16:
+	case RT5680_HP_IMP_SENS_DIG_CTRL17:
+	case RT5680_ALC_PGA_ST1 ... RT5680_ALC_PGA_ST3:
+	case RT5680_HAPTIC_GEN_CTRL1:
+	case RT5680_HAPTIC_GEN_CTRL2:
+	case RT5680_PITCH_HELLO_DET_CTRL1:
+	case RT5680_PITCH_HELLO_DET_CTRL19:
+	case RT5680_PITCH_HELLO_DET_CTRL20:
+	case RT5680_PITCH_HELLO_DET_CTRL22:
+	case RT5680_PITCH_HELLO_DET_CTRL23:
+	case RT5680_OK_DET_CTRL1:
+	case RT5680_OK_DET_CTRL2:
+	case RT5680_OK_DET_CTRL15:
+	case RT5680_DFLL_CAL_CTRL2:
+	case RT5680_DFLL_CAL_CTRL10:
+	case RT5680_DFLL_CAL_CTRL12 ... RT5680_DFLL_CAL_CTRL14:
+	case RT5680_VAD_FUNCTION_CTRL1:
+	case RT5680_DELAY_BUFFER_SRAM_CTRL2:
+	case RT5680_DELAY_BUFFER_SRAM_CTRL3:
+	case RT5680_DELAY_BUFFER_SRAM_CTRL5:
+	case RT5680_DELAY_BUFFER_SRAM_CTRL6:
+	case RT5680_DMIC_CLK_ON_OFF_CTRL12:
+	case RT5680_DAC_MULTI_DRC_HB_CTRL9:
+	case RT5680_DAC_MULTI_DRC_HB_CTRL11:
+	case RT5680_DAC_MULTI_DRC_HB_CTRL12:
+	case RT5680_DAC_MULTI_DRC_MB_CTRL9:
+	case RT5680_DAC_MULTI_DRC_MB_CTRL11:
+	case RT5680_DAC_MULTI_DRC_MB_CTRL12:
+	case RT5680_DAC_MULTI_DRC_BB_CTRL9:
+	case RT5680_DAC_MULTI_DRC_BB_CTRL11:
+	case RT5680_DAC_MULTI_DRC_BB_CTRL12:
+	case RT5680_DAC_MULTI_DRC_POS_ST1:
+	case RT5680_DAC_MULTI_DRC_POS_ST2:
+	case RT5680_ADC_ALC_ST1:
+	case RT5680_ADC_ALC_ST2:
+	case RT5680_HP_DC_CAL_CTRL1:
+	case RT5680_HP_DC_CAL_CTRL10:
+	case RT5680_HP_DC_CAL_ST1 ... RT5680_HP_DC_CAL_ST13:
+	case RT5680_MONO_AMP_DC_CAL_CTRL1:
+	case RT5680_MONO_AMP_DC_CAL_CTRL5:
+	case RT5680_MONO_AMP_DC_CAL_ST1 ... RT5680_MONO_AMP_DC_CAL_ST3:
+	case RT5680_HIFI_MINI_DSP_CTRL_ST:
+	case RT5680_SPI_SLAVE_CRC_CHECK_CTRL:
+	case RT5680_EFUSE_CTRL1:
+	case RT5680_EFUSE_CTRL6 ... RT5680_EFUSE_CTRL9:
+	case RT5680_EFUSE_CTRL11:
+	case RT5680_SLIMBUS_PARAMETER:
+	case RT5680_DUMMY_REG_1:
+		return true;
+
+	default:
+		return false;
+	}
+}
+
+static bool rt5680_readable_register(struct device *dev, unsigned int reg)
+{
+	switch (reg) {
+	case RT5680_RESET:
+	case RT5680_LOUT:
+	case RT5680_HP_OUT:
+	case RT5680_MONO_OUT:
+	case RT5680_BST12_CTRL:
+	case RT5680_BST34_CTRL:
+	case RT5680_VAD_INBUF_CTRL:
+	case RT5680_CAL_ADC_MIXER_CTRL:
+	case RT5680_MICBIAS1_CTRL1:
+	case RT5680_MICBIAS1_CTRL2:
+	case RT5680_DAC1_POST_DIG_VOL:
+	case RT5680_DAC1_DIG_VOL:
+	case RT5680_DAC2_DIG_VOL:
+	case RT5680_DAC3_DIG_VOL:
+	case RT5680_STO1_ADC_DIG_VOL:
+	case RT5680_MONO_ADC_DIG_VOL:
+	case RT5680_STO2_ADC_DIG_VOL:
+	case RT5680_STO3_ADC_DIG_VOL:
+	case RT5680_ADC_BST_GAIN_CTRL1:
+	case RT5680_ADC_BST_GAIN_CTRL2:
+	case RT5680_ADC_BST_GAIN_CTRL3:
+	case RT5680_SPDIF_IN_CTRL:
+	case RT5680_IF3_DATA_CTRL:
+	case RT5680_IF4_DATA_CTRL:
+	case RT5680_IF5_DATA_CTRL:
+	case RT5680_TDM1_CTRL1:
+	case RT5680_TDM1_CTRL2:
+	case RT5680_TDM1_CTRL3:
+	case RT5680_TDM1_CTRL4:
+	case RT5680_TDM1_CTRL5:
+	case RT5680_TDM1_CTRL6:
+	case RT5680_TDM1_CTRL7:
+	case RT5680_TDM2_CTRL1:
+	case RT5680_TDM2_CTRL2:
+	case RT5680_TDM2_CTRL3:
+	case RT5680_TDM2_CTRL4:
+	case RT5680_TDM2_CTRL5:
+	case RT5680_TDM2_CTRL6:
+	case RT5680_TDM2_CTRL7:
+	case RT5680_STO1_DAC_MIXER_CTRL1:
+	case RT5680_STO1_DAC_MIXER_CTRL2:
+	case RT5680_MONO_DAC_MIXER_CTRL1:
+	case RT5680_MONO_DAC_MIXER_CTRL2:
+	case RT5680_DD_MIXER_CTRL1:
+	case RT5680_DD_MIXER_CTRL2:
+	case RT5680_DAC1_MIXER_CTRL:
+	case RT5680_DAC2_MIXER_CTRL:
+	case RT5680_DAC3_MIXER_CTRL:
+	case RT5680_DAC_SOURCE_CTRL:
+	case RT5680_STO1_ADC_MIXER_CTRL:
+	case RT5680_MONO_ADC_MIXER_CTRL1:
+	case RT5680_MONO_ADC_MIXER_CTRL2:
+	case RT5680_STO2_ADC_MIXER_CTRL:
+	case RT5680_STO3_ADC_MIXER_CTRL:
+	case RT5680_DMIC_CTRL1:
+	case RT5680_DMIC_CTRL2:
+	case RT5680_HPF_CTRL1:
+	case RT5680_SV_ZCD_CTRL1:
+	case RT5680_PWR_ADC:
+	case RT5680_PWR_DIG1:
+	case RT5680_PWR_DIG2:
+	case RT5680_PWR_ANA1:
+	case RT5680_PWR_ANA2:
+	case RT5680_PWR_DSP:
+	case RT5680_PWR_LDO1:
+	case RT5680_PWR_LDO2:
+	case RT5680_PWR_LDO3:
+	case RT5680_PWR_LDO4:
+	case RT5680_PWR_LDO5:
+	case RT5680_I2S1_SDP:
+	case RT5680_I2S2_SDP:
+	case RT5680_I2S3_SDP:
+	case RT5680_I2S4_SDP:
+	case RT5680_I2S5_SDP:
+	case RT5680_I2S_LRCK_BCLK_SOURCE:
+	case RT5680_CLK_TREE_CTRL1:
+	case RT5680_CLK_TREE_CTRL2:
+	case RT5680_CLK_TREE_CTRL3:
+	case RT5680_CLK_TREE_CTRL4:
+	case RT5680_PLL1_CTRL1:
+	case RT5680_PLL1_CTRL2:
+	case RT5680_PLL2_CTRL1:
+	case RT5680_PLL2_CTRL2:
+	case RT5680_DSP_CLK_SOURCE1:
+	case RT5680_DSP_CLK_SOURCE2:
+	case RT5680_GLB_CLK1:
+	case RT5680_GLB_CLK2:
+	case RT5680_ASRC1:
+	case RT5680_ASRC2:
+	case RT5680_ASRC3:
+	case RT5680_ASRC4:
+	case RT5680_ASRC5:
+	case RT5680_ASRC6:
+	case RT5680_ASRC7:
+	case RT5680_ASRC8:
+	case RT5680_ASRC9:
+	case RT5680_ASRC10:
+	case RT5680_ASRC11:
+	case RT5680_ASRC12:
+	case RT5680_ASRC13:
+	case RT5680_ASRC14:
+	case RT5680_ASRC15:
+	case RT5680_ASRC16:
+	case RT5680_ASRC17:
+	case RT5680_ASRC18:
+	case RT5680_ASRC19:
+	case RT5680_ASRC20:
+	case RT5680_ASRC21:
+	case RT5680_ASRC22:
+	case RT5680_ASRC23:
+	case RT5680_ASRC24:
+	case RT5680_ASRC25:
+	case RT5680_FRAC_DIV_CTRL1:
+	case RT5680_FRAC_DIV_CTRL2:
+	case RT5680_JACK_MIC_DET_CTRL1:
+	case RT5680_JACK_MIC_DET_CTRL2:
+	case RT5680_JACK_MIC_DET_CTRL3:
+	case RT5680_JACK_MIC_DET_CTRL4:
+	case RT5680_JACK_DET_CTRL1:
+	case RT5680_JACK_DET_CTRL2:
+	case RT5680_JACK_DET_CTRL3:
+	case RT5680_JACK_DET_CTRL4:
+	case RT5680_JACK_DET_CTRL5:
+	case RT5680_IRQ_ST1:
+	case RT5680_IRQ_ST2:
+	case RT5680_IRQ_CTRL1:
+	case RT5680_IRQ_CTRL2:
+	case RT5680_IRQ_CTRL3:
+	case RT5680_IRQ_CTRL4:
+	case RT5680_IRQ_CTRL5:
+	case RT5680_IRQ_CTRL6:
+	case RT5680_IRQ_CTRL7:
+	case RT5680_IRQ_CTRL8:
+	case RT5680_IRQ_CTRL9:
+	case RT5680_MF_PIN_CTRL1:
+	case RT5680_MF_PIN_CTRL2:
+	case RT5680_MF_PIN_CTRL3:
+	case RT5680_GPIO_CTRL1:
+	case RT5680_GPIO_CTRL2:
+	case RT5680_GPIO_CTRL3:
+	case RT5680_GPIO_CTRL4:
+	case RT5680_GPIO_CTRL5:
+	case RT5680_GPIO_CTRL6:
+	case RT5680_GPIO_ST1:
+	case RT5680_GPIO_ST2:
+	case RT5680_LP_DET_CTRL:
+	case RT5680_STO1_ADC_HPF_CTRL1:
+	case RT5680_STO1_ADC_HPF_CTRL2:
+	case RT5680_MONO_ADC_HPF_CTRL1:
+	case RT5680_MONO_ADC_HPF_CTRL2:
+	case RT5680_STO2_ADC_HPF_CTRL1:
+	case RT5680_STO2_ADC_HPF_CTRL2:
+	case RT5680_STO3_ADC_HPF_CTRL1:
+	case RT5680_STO3_ADC_HPF_CTRL2:
+	case RT5680_ZCD_CTRL:
+	case RT5680_IL_CMD1:
+	case RT5680_IL_CMD2:
+	case RT5680_IL_CMD3:
+	case RT5680_IL_CMD4:
+	case RT5680_4BTN_IL_CMD1:
+	case RT5680_4BTN_IL_CMD2:
+	case RT5680_4BTN_IL_CMD3:
+	case RT5680_PS_IL_CMD1:
+	case RT5680_DSP_OUTB_0123_MIXER_CTRL:
+	case RT5680_DSP_OUTB_45_MIXER_CTRL:
+	case RT5680_DSP_OUTB_67_MIXER_CTRL:
+	case RT5680_MCLK_GATING_CTRL:
+	case RT5680_VENDOR_ID:
+	case RT5680_VENDOR_ID1:
+	case RT5680_VENDOR_ID2:
+	case RT5680_PDM_OUTPUT_CTRL:
+	case RT5680_PDM1_CTRL1:
+	case RT5680_PDM1_CTRL2:
+	case RT5680_PDM1_CTRL3:
+	case RT5680_PDM1_CTRL4:
+	case RT5680_PDM1_CTRL5:
+	case RT5680_PDM2_CTRL1:
+	case RT5680_PDM2_CTRL2:
+	case RT5680_PDM2_CTRL3:
+	case RT5680_PDM2_CTRL4:
+	case RT5680_PDM2_CTRL5:
+	case RT5680_STO_DAC_POST_VOL_CTRL:
+	case RT5680_ST_CTRL:
+	case RT5680_MCLK_DET_PROTECT_CTRL:
+	case RT5680_STO_HP_NG2_CTRL1:
+	case RT5680_STO_HP_NG2_CTRL2:
+	case RT5680_STO_HP_NG2_CTRL3:
+	case RT5680_STO_HP_NG2_CTRL4:
+	case RT5680_STO_HP_NG2_CTRL5:
+	case RT5680_STO_HP_NG2_CTRL6:
+	case RT5680_STO_HP_NG2_ST1:
+	case RT5680_STO_HP_NG2_ST2:
+	case RT5680_STO_HP_NG2_ST3:
+	case RT5680_NG2_ENV_DITHER_CTRL:
+	case RT5680_MONO_AMP_NG2_CTRL1:
+	case RT5680_MONO_AMP_NG2_CTRL2:
+	case RT5680_MONO_AMP_NG2_CTRL3:
+	case RT5680_MONO_AMP_NG2_CTRL4:
+	case RT5680_MONO_AMP_NG2_CTRL5:
+	case RT5680_MONO_AMP_NG2_ST1:
+	case RT5680_MONO_AMP_NG2_ST2:
+	case RT5680_IF_INPUT_DET_ST1:
+	case RT5680_IF_INPUT_DET_ST2:
+	case RT5680_IF_INPUT_DET_ST3:
+	case RT5680_STO_DAC_SIL_DET_CTRL:
+	case RT5680_MONO_DACL_SIL_DET_CTRL:
+	case RT5680_MONO_DACR_SIL_DET_CTRL:
+	case RT5680_DD_MIXERL_SIL_DET_CTRL:
+	case RT5680_DD_MIXERR_SIL_DET_CTRL:
+	case RT5680_SIL_DET_CTRLOUTPUT1:
+	case RT5680_SIL_DET_CTRLOUTPUT2:
+	case RT5680_SIL_DET_CTRLOUTPUT3:
+	case RT5680_SIL_DET_CTRLOUTPUT4:
+	case RT5680_SIL_DET_CTRLOUTPUT5:
+	case RT5680_SIL_DET_CTRLOUTPUT6:
+	case RT5680_SIL_DET_CTRLOUTPUT7:
+	case RT5680_SIL_DET_CTRLOUTPUT8:
+	case RT5680_ADC_EQ_CTRL1:
+	case RT5680_ADC_EQ_CTRL2:
+	case RT5680_DAC_EQ_CTRL1:
+	case RT5680_DAC_EQ_CTRL2:
+	case RT5680_DAC_EQ_CTRL3:
+	case RT5680_DAC_EQ_CTRL4:
+	case RT5680_I2S_MASTER_CLK_CTRL1:
+	case RT5680_I2S_MASTER_CLK_CTRL2:
+	case RT5680_I2S_MASTER_CLK_CTRL3:
+	case RT5680_I2S_MASTER_CLK_CTRL4:
+	case RT5680_I2S_MASTER_CLK_CTRL5:
+	case RT5680_I2S_MASTER_CLK_CTRL6:
+	case RT5680_I2S_MASTER_CLK_CTRL7:
+	case RT5680_I2S_MASTER_CLK_CTRL8:
+	case RT5680_I2S_MASTER_CLK_CTRL9:
+	case RT5680_I2S_MASTER_CLK_CTRL10:
+	case RT5680_I2S_MASTER_CLK_CTRL11:
+	case RT5680_I2S_MASTER_CLK_CTRL12:
+	case RT5680_I2S_MASTER_CLK_CTRL13:
+	case RT5680_HP_DECR_DECOUP_CTRL1:
+	case RT5680_HP_DECR_DECOUP_CTRL2:
+	case RT5680_HP_DECR_DECOUP_CTRL3:
+	case RT5680_HP_DECR_DECOUP_CTRL4:
+	case RT5680_VAD_ADC_FILTER_CTRL1:
+	case RT5680_VAD_ADC_FILTER_CTRL2:
+	case RT5680_VAD_CLK_SETTING1:
+	case RT5680_VAD_CLK_SETTING2:
+	case RT5680_VAD_ADC_PLL3_CTRL1:
+	case RT5680_VAD_ADC_PLL3_CTRL2:
+	case RT5680_HP_BL_CTRL1:
+	case RT5680_HP_BL_CTRL2:
+	case RT5680_HP_IMP_SENS_CTRL1:
+	case RT5680_HP_IMP_SENS_CTRL2:
+	case RT5680_HP_IMP_SENS_CTRL3:
+	case RT5680_HP_IMP_SENS_CTRL4:
+	case RT5680_HP_IMP_SENS_CTRL5:
+	case RT5680_HP_IMP_SENS_CTRL6:
+	case RT5680_HP_IMP_SENS_CTRL7:
+	case RT5680_HP_IMP_SENS_CTRL8:
+	case RT5680_HP_IMP_SENS_CTRL9:
+	case RT5680_HP_IMP_SENS_CTRL10:
+	case RT5680_HP_IMP_SENS_CTRL11:
+	case RT5680_HP_IMP_SENS_CTRL12:
+	case RT5680_HP_IMP_SENS_CTRL13:
+	case RT5680_HP_IMP_SENS_CTRL14:
+	case RT5680_HP_IMP_SENS_CTRL15:
+	case RT5680_HP_IMP_SENS_CTRL16:
+	case RT5680_HP_IMP_SENS_CTRL17:
+	case RT5680_HP_IMP_SENS_CTRL18:
+	case RT5680_HP_IMP_SENS_DIG_CTRL1:
+	case RT5680_HP_IMP_SENS_DIG_CTRL2:
+	case RT5680_HP_IMP_SENS_DIG_CTRL3:
+	case RT5680_HP_IMP_SENS_DIG_CTRL4:
+	case RT5680_HP_IMP_SENS_DIG_CTRL5:
+	case RT5680_HP_IMP_SENS_DIG_CTRL6:
+	case RT5680_HP_IMP_SENS_DIG_CTRL7:
+	case RT5680_HP_IMP_SENS_DIG_CTRL8:
+	case RT5680_HP_IMP_SENS_DIG_CTRL9:
+	case RT5680_HP_IMP_SENS_DIG_CTRL10:
+	case RT5680_HP_IMP_SENS_DIG_CTRL11:
+	case RT5680_HP_IMP_SENS_DIG_CTRL12:
+	case RT5680_HP_IMP_SENS_DIG_CTRL13:
+	case RT5680_HP_IMP_SENS_DIG_CTRL14:
+	case RT5680_HP_IMP_SENS_DIG_CTRL15:
+	case RT5680_HP_IMP_SENS_DIG_CTRL16:
+	case RT5680_HP_IMP_SENS_DIG_CTRL17:
+	case RT5680_ALC_PGA_CTRL1:
+	case RT5680_ALC_PGA_CTRL2:
+	case RT5680_ALC_PGA_CTRL3:
+	case RT5680_ALC_PGA_CTRL4:
+	case RT5680_ALC_PGA_CTRL5:
+	case RT5680_ALC_PGA_CTRL6:
+	case RT5680_ALC_PGA_CTRL7:
+	case RT5680_ALC_PGA_ST1:
+	case RT5680_ALC_PGA_ST2:
+	case RT5680_ALC_PGA_ST3:
+	case RT5680_ALC_PGA_SOURCE_CTRL1:
+	case RT5680_HAPTIC_GEN_CTRL1:
+	case RT5680_HAPTIC_GEN_CTRL2:
+	case RT5680_HAPTIC_GEN_CTRL3:
+	case RT5680_HAPTIC_GEN_CTRL4:
+	case RT5680_HAPTIC_GEN_CTRL5:
+	case RT5680_HAPTIC_GEN_CTRL6:
+	case RT5680_HAPTIC_GEN_CTRL7:
+	case RT5680_HAPTIC_GEN_CTRL8:
+	case RT5680_HAPTIC_GEN_CTRL9:
+	case RT5680_HAPTIC_GEN_CTRL10:
+	case RT5680_AUTO_RC_CLK_CTRL1:
+	case RT5680_AUTO_RC_CLK_CTRL2:
+	case RT5680_AUTO_RC_CLK_CTRL3:
+	case RT5680_DAC_L_EQ_LPF1_A1:
+	case RT5680_DAC_L_EQ_LPF1_H0:
+	case RT5680_DAC_R_EQ_LPF1_A1:
+	case RT5680_DAC_R_EQ_LPF1_H0:
+	case RT5680_DAC_L_EQ_LPF2_A1:
+	case RT5680_DAC_L_EQ_LPF2_H0:
+	case RT5680_DAC_R_EQ_LPF2_A1:
+	case RT5680_DAC_R_EQ_LPF2_H0:
+	case RT5680_DAC_L_EQ_BPF1_A1:
+	case RT5680_DAC_L_EQ_BPF1_A2:
+	case RT5680_DAC_L_EQ_BPF1_H0:
+	case RT5680_DAC_R_EQ_BPF1_A1:
+	case RT5680_DAC_R_EQ_BPF1_A2:
+	case RT5680_DAC_R_EQ_BPF1_H0:
+	case RT5680_DAC_L_EQ_BPF2_A1:
+	case RT5680_DAC_L_EQ_BPF2_A2:
+	case RT5680_DAC_L_EQ_BPF2_H0:
+	case RT5680_DAC_R_EQ_BPF2_A1:
+	case RT5680_DAC_R_EQ_BPF2_A2:
+	case RT5680_DAC_R_EQ_BPF2_H0:
+	case RT5680_DAC_L_EQ_BPF3_A1:
+	case RT5680_DAC_L_EQ_BPF3_A2:
+	case RT5680_DAC_L_EQ_BPF3_H0:
+	case RT5680_DAC_R_EQ_BPF3_A1:
+	case RT5680_DAC_R_EQ_BPF3_A2:
+	case RT5680_DAC_R_EQ_BPF3_H0:
+	case RT5680_DAC_L_EQ_BPF4_A1:
+	case RT5680_DAC_L_EQ_BPF4_A2:
+	case RT5680_DAC_L_EQ_BPF4_H0:
+	case RT5680_DAC_R_EQ_BPF4_A1:
+	case RT5680_DAC_R_EQ_BPF4_A2:
+	case RT5680_DAC_R_EQ_BPF4_H0:
+	case RT5680_DAC_L_EQ_BPF5_A1:
+	case RT5680_DAC_L_EQ_BPF5_A2:
+	case RT5680_DAC_L_EQ_BPF5_H0:
+	case RT5680_DAC_R_EQ_BPF5_A1:
+	case RT5680_DAC_R_EQ_BPF5_A2:
+	case RT5680_DAC_R_EQ_BPF5_H0:
+	case RT5680_DAC_L_EQ_HPF1_A1:
+	case RT5680_DAC_L_EQ_HPF1_H0:
+	case RT5680_DAC_R_EQ_HPF1_A1:
+	case RT5680_DAC_R_EQ_HPF1_H0:
+	case RT5680_DAC_L_EQ_HPF2_A1:
+	case RT5680_DAC_L_EQ_HPF2_A2:
+	case RT5680_DAC_L_EQ_HPF2_H0:
+	case RT5680_DAC_R_EQ_HPF2_A1:
+	case RT5680_DAC_R_EQ_HPF2_A2:
+	case RT5680_DAC_R_EQ_HPF2_H0:
+	case RT5680_DAC_L_EQ_HPF3_A1:
+	case RT5680_DAC_L_EQ_HPF3_H0:
+	case RT5680_DAC_R_EQ_HPF3_A1:
+	case RT5680_DAC_R_EQ_HPF3_H0:
+	case RT5680_DAC_L_BI_EQ_H0_1:
+	case RT5680_DAC_L_BI_EQ_H0_2:
+	case RT5680_DAC_L_BI_EQ_B1_1:
+	case RT5680_DAC_L_BI_EQ_B1_2:
+	case RT5680_DAC_L_BI_EQ_B2_1:
+	case RT5680_DAC_L_BI_EQ_B2_2:
+	case RT5680_DAC_L_BI_EQ_A1_1:
+	case RT5680_DAC_L_BI_EQ_A1_2:
+	case RT5680_DAC_L_BI_EQ_A2_1:
+	case RT5680_DAC_L_BI_EQ_A2_2:
+	case RT5680_DAC_R_BI_EQ_H0_1:
+	case RT5680_DAC_R_BI_EQ_H0_2:
+	case RT5680_DAC_R_BI_EQ_B1_1:
+	case RT5680_DAC_R_BI_EQ_B1_2:
+	case RT5680_DAC_R_BI_EQ_B2_1:
+	case RT5680_DAC_R_BI_EQ_B2_2:
+	case RT5680_DAC_R_BI_EQ_A1_1:
+	case RT5680_DAC_R_BI_EQ_A1_2:
+	case RT5680_DAC_R_BI_EQ_A2_1:
+	case RT5680_DAC_R_BI_EQ_A2_2:
+	case RT5680_DAC_L_EQ_PRE_VOL_CTRL:
+	case RT5680_DAC_R_EQ_PRE_VOL_CTRL:
+	case RT5680_DAC_L_EQ_POST_VOL_CTRL:
+	case RT5680_DAC_R_EQ_POST_VOL_CTRL:
+	case RT5680_ADC_L_EQ_LPF_A1:
+	case RT5680_ADC_L_EQ_LPF_H0:
+	case RT5680_ADC_R_EQ_LPF_A1:
+	case RT5680_ADC_R_EQ_LPF_H0:
+	case RT5680_ADC_L_EQ_BPF1_A1:
+	case RT5680_ADC_L_EQ_BPF1_A2:
+	case RT5680_ADC_L_EQ_BPF1_H0:
+	case RT5680_ADC_R_EQ_BPF1_A1:
+	case RT5680_ADC_R_EQ_BPF1_A2:
+	case RT5680_ADC_R_EQ_BPF1_H0:
+	case RT5680_ADC_L_EQ_BPF2_A1:
+	case RT5680_ADC_L_EQ_BPF2_A2:
+	case RT5680_ADC_L_EQ_BPF2_H0:
+	case RT5680_ADC_R_EQ_BPF2_A1:
+	case RT5680_ADC_R_EQ_BPF2_A2:
+	case RT5680_ADC_R_EQ_BPF2_H0:
+	case RT5680_ADC_L_EQ_BPF3_A1:
+	case RT5680_ADC_L_EQ_BPF3_A2:
+	case RT5680_ADC_L_EQ_BPF3_H0:
+	case RT5680_ADC_R_EQ_BPF3_A1:
+	case RT5680_ADC_R_EQ_BPF3_A2:
+	case RT5680_ADC_R_EQ_BPF3_H0:
+	case RT5680_ADC_L_EQ_BPF4_A1:
+	case RT5680_ADC_L_EQ_BPF4_A2:
+	case RT5680_ADC_L_EQ_BPF4_H0:
+	case RT5680_ADC_R_EQ_BPF4_A1:
+	case RT5680_ADC_R_EQ_BPF4_A2:
+	case RT5680_ADC_R_EQ_BPF4_H0:
+	case RT5680_ADC_L_EQ_HPF1_A1:
+	case RT5680_ADC_L_EQ_HPF1_H0:
+	case RT5680_ADC_R_EQ_HPF1_A1:
+	case RT5680_ADC_R_EQ_HPF1_H0:
+	case RT5680_ADC_L_EQ_PRE_VOL_CTRL:
+	case RT5680_ADC_R_EQ_PRE_VOL_CTRL:
+	case RT5680_ADC_L_EQ_POST_VOL_CTRL:
+	case RT5680_ADC_R_EQ_POST_VOL_CTRL:
+	case RT5680_PITCH_HELLO_DET_CTRL1:
+	case RT5680_PITCH_HELLO_DET_CTRL2:
+	case RT5680_PITCH_HELLO_DET_CTRL3:
+	case RT5680_PITCH_HELLO_DET_CTRL4:
+	case RT5680_PITCH_HELLO_DET_CTRL5:
+	case RT5680_PITCH_HELLO_DET_CTRL6:
+	case RT5680_PITCH_HELLO_DET_CTRL7:
+	case RT5680_PITCH_HELLO_DET_CTRL8:
+	case RT5680_PITCH_HELLO_DET_CTRL9:
+	case RT5680_PITCH_HELLO_DET_CTRL10:
+	case RT5680_PITCH_HELLO_DET_CTRL11:
+	case RT5680_PITCH_HELLO_DET_CTRL12:
+	case RT5680_PITCH_HELLO_DET_CTRL13:
+	case RT5680_PITCH_HELLO_DET_CTRL14:
+	case RT5680_PITCH_HELLO_DET_CTRL15:
+	case RT5680_PITCH_HELLO_DET_CTRL16:
+	case RT5680_PITCH_HELLO_DET_CTRL17:
+	case RT5680_PITCH_HELLO_DET_CTRL18:
+	case RT5680_PITCH_HELLO_DET_CTRL19:
+	case RT5680_PITCH_HELLO_DET_CTRL20:
+	case RT5680_PITCH_HELLO_DET_CTRL21:
+	case RT5680_PITCH_HELLO_DET_CTRL22:
+	case RT5680_PITCH_HELLO_DET_CTRL23:
+	case RT5680_OK_DET_CTRL1:
+	case RT5680_OK_DET_CTRL2:
+	case RT5680_OK_DET_CTRL3:
+	case RT5680_OK_DET_CTRL4:
+	case RT5680_OK_DET_CTRL5:
+	case RT5680_OK_DET_CTRL6:
+	case RT5680_OK_DET_CTRL7:
+	case RT5680_OK_DET_CTRL8:
+	case RT5680_OK_DET_CTRL9:
+	case RT5680_OK_DET_CTRL10:
+	case RT5680_OK_DET_CTRL11:
+	case RT5680_OK_DET_CTRL12:
+	case RT5680_OK_DET_CTRL13:
+	case RT5680_OK_DET_CTRL14:
+	case RT5680_OK_DET_CTRL15:
+	case RT5680_DFLL_CAL_CTRL1:
+	case RT5680_DFLL_CAL_CTRL2:
+	case RT5680_DFLL_CAL_CTRL3:
+	case RT5680_DFLL_CAL_CTRL4:
+	case RT5680_DFLL_CAL_CTRL5:
+	case RT5680_DFLL_CAL_CTRL6:
+	case RT5680_DFLL_CAL_CTRL7:
+	case RT5680_DFLL_CAL_CTRL8:
+	case RT5680_DFLL_CAL_CTRL9:
+	case RT5680_DFLL_CAL_CTRL10:
+	case RT5680_DFLL_CAL_CTRL11:
+	case RT5680_DFLL_CAL_CTRL12:
+	case RT5680_DFLL_CAL_CTRL13:
+	case RT5680_DFLL_CAL_CTRL14:
+	case RT5680_VAD_FUNCTION_CTRL1:
+	case RT5680_DELAY_BUFFER_SRAM_CTRL1:
+	case RT5680_DELAY_BUFFER_SRAM_CTRL2:
+	case RT5680_DELAY_BUFFER_SRAM_CTRL3:
+	case RT5680_DELAY_BUFFER_SRAM_CTRL4:
+	case RT5680_DELAY_BUFFER_SRAM_CTRL5:
+	case RT5680_DELAY_BUFFER_SRAM_CTRL6:
+	case RT5680_DELAY_BUFFER_SRAM_CTRL7:
+	case RT5680_DMIC_CLK_ON_OFF_CTRL1:
+	case RT5680_DMIC_CLK_ON_OFF_CTRL2:
+	case RT5680_DMIC_CLK_ON_OFF_CTRL3:
+	case RT5680_DMIC_CLK_ON_OFF_CTRL4:
+	case RT5680_DMIC_CLK_ON_OFF_CTRL5:
+	case RT5680_DMIC_CLK_ON_OFF_CTRL6:
+	case RT5680_DMIC_CLK_ON_OFF_CTRL7:
+	case RT5680_DMIC_CLK_ON_OFF_CTRL8:
+	case RT5680_DMIC_CLK_ON_OFF_CTRL9:
+	case RT5680_DMIC_CLK_ON_OFF_CTRL10:
+	case RT5680_DMIC_CLK_ON_OFF_CTRL11:
+	case RT5680_DMIC_CLK_ON_OFF_CTRL12:
+	case RT5680_DAC_MULTI_DRC_MISC_CTRL:
+	case RT5680_DAC_MULTI_DRC_COEF_FB1_CTRL1:
+	case RT5680_DAC_MULTI_DRC_COEF_FB1_CTRL2:
+	case RT5680_DAC_MULTI_DRC_COEF_FB1_CTRL3:
+	case RT5680_DAC_MULTI_DRC_COEF_FB1_CTRL4:
+	case RT5680_DAC_MULTI_DRC_COEF_FB1_CTRL5:
+	case RT5680_DAC_MULTI_DRC_COEF_FB1_CTRL6:
+	case RT5680_DAC_MULTI_DRC_COEF_FB2_CTRL7:
+	case RT5680_DAC_MULTI_DRC_COEF_FB2_CTRL8:
+	case RT5680_DAC_MULTI_DRC_COEF_FB2_CTRL9:
+	case RT5680_DAC_MULTI_DRC_COEF_FB2_CTRL10:
+	case RT5680_DAC_MULTI_DRC_COEF_FB2_CTRL11:
+	case RT5680_DAC_MULTI_DRC_COEF_FB2_CTRL12:
+	case RT5680_DAC_MULTI_DRC_HB_CTRL1:
+	case RT5680_DAC_MULTI_DRC_HB_CTRL2:
+	case RT5680_DAC_MULTI_DRC_HB_CTRL3:
+	case RT5680_DAC_MULTI_DRC_HB_CTRL4:
+	case RT5680_DAC_MULTI_DRC_HB_CTRL5:
+	case RT5680_DAC_MULTI_DRC_HB_CTRL6:
+	case RT5680_DAC_MULTI_DRC_HB_CTRL7:
+	case RT5680_DAC_MULTI_DRC_HB_CTRL8:
+	case RT5680_DAC_MULTI_DRC_HB_CTRL9:
+	case RT5680_DAC_MULTI_DRC_HB_CTRL10:
+	case RT5680_DAC_MULTI_DRC_HB_CTRL11:
+	case RT5680_DAC_MULTI_DRC_HB_CTRL12:
+	case RT5680_DAC_MULTI_DRC_MB_CTRL1:
+	case RT5680_DAC_MULTI_DRC_MB_CTRL2:
+	case RT5680_DAC_MULTI_DRC_MB_CTRL3:
+	case RT5680_DAC_MULTI_DRC_MB_CTRL4:
+	case RT5680_DAC_MULTI_DRC_MB_CTRL5:
+	case RT5680_DAC_MULTI_DRC_MB_CTRL6:
+	case RT5680_DAC_MULTI_DRC_MB_CTRL7:
+	case RT5680_DAC_MULTI_DRC_MB_CTRL8:
+	case RT5680_DAC_MULTI_DRC_MB_CTRL9:
+	case RT5680_DAC_MULTI_DRC_MB_CTRL10:
+	case RT5680_DAC_MULTI_DRC_MB_CTRL11:
+	case RT5680_DAC_MULTI_DRC_MB_CTRL12:
+	case RT5680_DAC_MULTI_DRC_BB_CTRL1:
+	case RT5680_DAC_MULTI_DRC_BB_CTRL2:
+	case RT5680_DAC_MULTI_DRC_BB_CTRL3:
+	case RT5680_DAC_MULTI_DRC_BB_CTRL4:
+	case RT5680_DAC_MULTI_DRC_BB_CTRL5:
+	case RT5680_DAC_MULTI_DRC_BB_CTRL6:
+	case RT5680_DAC_MULTI_DRC_BB_CTRL7:
+	case RT5680_DAC_MULTI_DRC_BB_CTRL8:
+	case RT5680_DAC_MULTI_DRC_BB_CTRL9:
+	case RT5680_DAC_MULTI_DRC_BB_CTRL10:
+	case RT5680_DAC_MULTI_DRC_BB_CTRL11:
+	case RT5680_DAC_MULTI_DRC_BB_CTRL12:
+	case RT5680_DAC_MULTI_DRC_POS_CTRL1:
+	case RT5680_DAC_MULTI_DRC_POS_CTRL2:
+	case RT5680_DAC_MULTI_DRC_POS_CTRL3:
+	case RT5680_DAC_MULTI_DRC_POS_CTRL4:
+	case RT5680_DAC_MULTI_DRC_POS_CTRL5:
+	case RT5680_DAC_MULTI_DRC_POS_CTRL6:
+	case RT5680_DAC_MULTI_DRC_POS_CTRL7:
+	case RT5680_DAC_MULTI_DRC_POS_CTRL8:
+	case RT5680_DAC_MULTI_DRC_POS_CTRL9:
+	case RT5680_DAC_MULTI_DRC_POS_CTRL10:
+	case RT5680_DAC_MULTI_DRC_POS_CTRL11:
+	case RT5680_DAC_MULTI_DRC_POS_CTRL12:
+	case RT5680_DAC_MULTI_DRC_POS_CTRL13:
+	case RT5680_DAC_MULTI_DRC_POS_ST1:
+	case RT5680_DAC_MULTI_DRC_POS_ST2:
+	case RT5680_ADC_ALC_CTRL1:
+	case RT5680_ADC_ALC_CTRL2:
+	case RT5680_ADC_ALC_CTRL3:
+	case RT5680_ADC_ALC_CTRL4:
+	case RT5680_ADC_ALC_CTRL5:
+	case RT5680_ADC_ALC_CTRL6:
+	case RT5680_ADC_ALC_CTRL7:
+	case RT5680_ADC_ALC_CTRL8:
+	case RT5680_ADC_ALC_CTRL9:
+	case RT5680_ADC_ALC_CTRL10:
+	case RT5680_ADC_ALC_CTRL11:
+	case RT5680_ADC_ALC_CTRL12:
+	case RT5680_ADC_ALC_CTRL13:
+	case RT5680_ADC_ALC_CTRL14:
+	case RT5680_ADC_ALC_ST1:
+	case RT5680_ADC_ALC_ST2:
+	case RT5680_HP_DC_CAL_CTRL1:
+	case RT5680_HP_DC_CAL_CTRL2:
+	case RT5680_HP_DC_CAL_CTRL3:
+	case RT5680_HP_DC_CAL_CTRL4:
+	case RT5680_HP_DC_CAL_CTRL5:
+	case RT5680_HP_DC_CAL_CTRL6:
+	case RT5680_HP_DC_CAL_CTRL7:
+	case RT5680_HP_DC_CAL_CTRL8:
+	case RT5680_HP_DC_CAL_CTRL9:
+	case RT5680_HP_DC_CAL_CTRL10:
+	case RT5680_HP_DC_CAL_CTRL11:
+	case RT5680_HP_DC_CAL_CTRL12:
+	case RT5680_HP_DC_CAL_ST1:
+	case RT5680_HP_DC_CAL_ST2:
+	case RT5680_HP_DC_CAL_ST3:
+	case RT5680_HP_DC_CAL_ST4:
+	case RT5680_HP_DC_CAL_ST5:
+	case RT5680_HP_DC_CAL_ST6:
+	case RT5680_HP_DC_CAL_ST7:
+	case RT5680_HP_DC_CAL_ST8:
+	case RT5680_HP_DC_CAL_ST9:
+	case RT5680_HP_DC_CAL_ST10:
+	case RT5680_HP_DC_CAL_ST11:
+	case RT5680_HP_DC_CAL_ST12:
+	case RT5680_HP_DC_CAL_ST13:
+	case RT5680_MONO_AMP_DC_CAL_CTRL1:
+	case RT5680_MONO_AMP_DC_CAL_CTRL2:
+	case RT5680_MONO_AMP_DC_CAL_CTRL3:
+	case RT5680_MONO_AMP_DC_CAL_CTRL4:
+	case RT5680_MONO_AMP_DC_CAL_CTRL5:
+	case RT5680_MONO_AMP_DC_CAL_CTRL6:
+	case RT5680_MONO_AMP_DC_CAL_CTRL7:
+	case RT5680_MONO_AMP_DC_CAL_ST1:
+	case RT5680_MONO_AMP_DC_CAL_ST2:
+	case RT5680_MONO_AMP_DC_CAL_ST3:
+	case RT5680_DSP_IB_CTRL1:
+	case RT5680_DSP_IB_CTRL2:
+	case RT5680_DSP_IN_OB_CTRL:
+	case RT5680_DSP_OB01_DIG_VOL:
+	case RT5680_DSP_OB23_DIG_VOL:
+	case RT5680_DSP_OB45_DIG_VOL:
+	case RT5680_DSP_OB67_DIG_VOL:
+	case RT5680_MINI_DSP_OB01_DIG_VOL:
+	case RT5680_DSP_IB1_SRC_CTRL1:
+	case RT5680_DSP_IB1_SRC_CTRL2:
+	case RT5680_DSP_IB1_SRC_CTRL3:
+	case RT5680_DSP_IB1_SRC_CTRL4:
+	case RT5680_DSP_IB2_SRC_CTRL1:
+	case RT5680_DSP_IB2_SRC_CTRL2:
+	case RT5680_DSP_IB2_SRC_CTRL3:
+	case RT5680_DSP_IB2_SRC_CTRL4:
+	case RT5680_DSP_IB3_SRC_CTRL1:
+	case RT5680_DSP_IB3_SRC_CTRL2:
+	case RT5680_DSP_IB3_SRC_CTRL3:
+	case RT5680_DSP_IB3_SRC_CTRL4:
+	case RT5680_DSP_OB1_SRC_CTRL1:
+	case RT5680_DSP_OB1_SRC_CTRL2:
+	case RT5680_DSP_OB1_SRC_CTRL3:
+	case RT5680_DSP_OB1_SRC_CTRL4:
+	case RT5680_DSP_OB2_SRC_CTRL1:
+	case RT5680_DSP_OB2_SRC_CTRL2:
+	case RT5680_DSP_OB2_SRC_CTRL3:
+	case RT5680_DSP_OB2_SRC_CTRL4:
+	case RT5680_HIFI_MINI_DSP_CTRL_ST:
+	case RT5680_SPI_SLAVE_CRC_CHECK_CTRL:
+	case RT5680_EFUSE_CTRL1:
+	case RT5680_EFUSE_CTRL2:
+	case RT5680_EFUSE_CTRL3:
+	case RT5680_EFUSE_CTRL4:
+	case RT5680_EFUSE_CTRL5:
+	case RT5680_EFUSE_CTRL6:
+	case RT5680_EFUSE_CTRL7:
+	case RT5680_EFUSE_CTRL8:
+	case RT5680_EFUSE_CTRL9:
+	case RT5680_EFUSE_CTRL10:
+	case RT5680_EFUSE_CTRL11:
+	case RT5680_I2C_AND_SPI_SCRAM_CTRL:
+	case RT5680_I2C_SCRAM_WRITE_KEY1_MSB:
+	case RT5680_I2C_SCRAM_WRITE_KEY1_LSB:
+	case RT5680_I2C_SCRAM_WRITE_KEY2_MSB:
+	case RT5680_I2C_SCRAM_WRITE_KEY2_LSB:
+	case RT5680_I2C_SCRAM_READ_KEY1_MSB:
+	case RT5680_I2C_SCRAM_READ_KEY1_LSB:
+	case RT5680_I2C_SCRAM_READ_KEY2_MSB:
+	case RT5680_I2C_SCRAM_READ_KEY2_LSB:
+	case RT5680_SPI_SCRAM_WRITE_KEY1_1:
+	case RT5680_SPI_SCRAM_WRITE_KEY1_2:
+	case RT5680_SPI_SCRAM_WRITE_KEY1_3:
+	case RT5680_SPI_SCRAM_WRITE_KEY1_4:
+	case RT5680_SPI_SCRAM_WRITE_KEY2_1:
+	case RT5680_SPI_SCRAM_WRITE_KEY2_2:
+	case RT5680_SPI_SCRAM_WRITE_KEY2_3:
+	case RT5680_SPI_SCRAM_WRITE_KEY2_4:
+	case RT5680_SPI_SCRAM_READ_KEY1_1:
+	case RT5680_SPI_SCRAM_READ_KEY1_2:
+	case RT5680_SPI_SCRAM_READ_KEY1_3:
+	case RT5680_SPI_SCRAM_READ_KEY1_4:
+	case RT5680_SPI_SCRAM_READ_KEY2_1:
+	case RT5680_SPI_SCRAM_READ_KEY2_2:
+	case RT5680_SPI_SCRAM_READ_KEY2_3:
+	case RT5680_SPI_SCRAM_READ_KEY2_4:
+	case RT5680_GPIO1_TEST_OUTPUT_SEL1:
+	case RT5680_GPIO1_TEST_OUTPUT_SEL2:
+	case RT5680_GPIO1_TEST_OUTPUT_SEL3:
+	case RT5680_GPIO1_TEST_OUTPUT_SEL4:
+	case RT5680_PR_REG_MONO_AMP_BIAS_CTRL:
+	case RT5680_PR_REG_BIAS_CTRL1:
+	case RT5680_PR_REG_BIAS_CTRL2:
+	case RT5680_PR_REG_BIAS_CTRL3:
+	case RT5680_PR_REG_BIAS_CTRL4:
+	case RT5680_PR_REG_BIAS_CTRL5:
+	case RT5680_PR_REG_BIAS_CTRL6:
+	case RT5680_PR_REG_BIAS_CTRL7:
+	case RT5680_PR_REG_BIAS_CTRL8:
+	case RT5680_PR_REG_BIAS_CTRL9:
+	case RT5680_PR_REG_BIAS_CTRL10:
+	case RT5680_PR_REG_BIAS_CTRL11:
+	case RT5680_PR_REG_BIAS_CTRL12:
+	case RT5680_PR_REG_BIAS_CTRL13:
+	case RT5680_PR_REG_ADC12_CLK_CTRL:
+	case RT5680_PR_REG_ADC34_CLK_CTRL:
+	case RT5680_PR_REG_ADC5_CLK_CTRL1:
+	case RT5680_PR_REG_ADC5_CLK_CTRL2:
+	case RT5680_PR_REG_ADC67_CLK_CTRL:
+	case RT5680_PR_REG_PLL1_CTRL1:
+	case RT5680_PR_REG_PLL1_CTRL2:
+	case RT5680_PR_REG_PLL2_CTRL1:
+	case RT5680_PR_REG_PLL2_CTRL2:
+	case RT5680_PR_REG_VREF_CTRL1:
+	case RT5680_PR_REG_VREF_CTRL2:
+	case RT5680_PR_REG_BST1_CTRL:
+	case RT5680_PR_REG_BST2_CTRL:
+	case RT5680_PR_REG_BST3_CTRL:
+	case RT5680_PR_REG_BST4_CTRL:
+	case RT5680_DAC_ADC_DIG_VOL1:
+	case RT5680_DAC_ADC_DIG_VOL2:
+	case RT5680_VAD_SRAM_TEST:
+	case RT5680_PAD_DRIVING_CTRL1:
+	case RT5680_PAD_DRIVING_CTRL2:
+	case RT5680_PAD_DRIVING_CTRL3:
+	case RT5680_DIG_INPUT_PIN_ST_CTRL1:
+	case RT5680_DIG_INPUT_PIN_ST_CTRL2:
+	case RT5680_DIG_INPUT_PIN_ST_CTRL3:
+	case RT5680_DIG_INPUT_PIN_ST_CTRL4:
+	case RT5680_DIG_INPUT_PIN_ST_CTRL5:
+	case RT5680_TEST_MODE_CTRL1:
+	case RT5680_TEST_MODE_CTRL2:
+	case RT5680_GPIO1_GPIO3_TEST_MODE_CTRL:
+	case RT5680_GPIO5_GPIO6_TEST_MODE_CTRL:
+	case RT5680_GPIO6_GPIO7_TEST_MODE_CTRL:
+	case RT5680_CODEC_DOMAIN_REG_RW_CTRL:
+	case RT5680_DAC1_CLK_AND_CHOPPER_CTRL:
+	case RT5680_DAC2_CLK_AND_CHOPPER_CTRL:
+	case RT5680_DAC3_CLK_AND_CHOPPER_CTRL:
+	case RT5680_DAC4_CLK_AND_CHOPPER_CTRL:
+	case RT5680_DAC5_CLK_AND_CHOPPER_CTRL:
+	case RT5680_DAC1_DAC2_DUMMY_REG:
+	case RT5680_HP_CTRL1:
+	case RT5680_HP_CTRL2:
+	case RT5680_HP_CTRL3:
+	case RT5680_HP_CTRL4:
+	case RT5680_HP_CTRL5:
+	case RT5680_HP_CTRL6:
+	case RT5680_LDO6_PR_CTRL1:
+	case RT5680_LDO6_PR_CTRL2:
+	case RT5680_LDO6_PR_CTRL3:
+	case RT5680_LDO6_PR_CTRL4:
+	case RT5680_LDO_AVDD1_PR_CTRL:
+	case RT5680_LDO_HV2_PR_CTRL:
+	case RT5680_LDO_HV3_PR_CTRL:
+	case RT5680_LDO1_LDO3_LDO4_PR_CTRL:
+	case RT5680_LDO8_LDO9_PR_CTRL:
+	case RT5680_VREF5_L_PR_CTRL:
+	case RT5680_VREF5_R_PR_CTRL:
+	case RT5680_SLIMBUS_PARAMETER:
+	case RT5680_SLIMBUS_RX:
+	case RT5680_SLIMBUS_CTRL:
+	case RT5680_LOUT_CTRL:
+	case RT5680_DUMMY_REG_1:
+	case RT5680_DUMMY_REG_2:
+	case RT5680_DUMMY_REG_3:
+	case RT5680_DUMMY_REG_4:
+	case RT5680_DSP_I2C_DATA_MSB:
+		return true;
+
+	default:
+		return false;
+	}
+}
+
+static const DECLARE_TLV_DB_SCALE(ng2_vol_tlv, -2325, 75, 0);
+static const DECLARE_TLV_DB_SCALE(dac_vol_tlv, -65625, 375, 0);
+static const DECLARE_TLV_DB_SCALE(bst_tlv, -1200, 75, 0);
+static const DECLARE_TLV_DB_SCALE(adc_vol_tlv, -17625, 375, 0);
+static const DECLARE_TLV_DB_SCALE(adc_bst_tlv, 0, 1200, 0);
+
+static const char * const rt5680_asrc_clk_source[] = {
+	"clk_sys_div_out", "clk_i2s1_track", "clk_i2s2_track", "clk_i2s3_track",
+	"clk_i2s4_track", "clk_i2s5_track", "clk_i2s6_track", "clk_i2s7_track",
+	"clk_sys2", "clk_sys3", "clk_sys4", "clk_sys5", "clk_sys6", "clk_sys7",
+	"clk_sys8"
+};
+
+static const SOC_ENUM_SINGLE_DECL(rt5680_da_sto1_asrc_enum, RT5680_ASRC3,
+	RT5680_DA_FILTER_STEREO_TRACK_SFT, rt5680_asrc_clk_source);
+
+static const SOC_ENUM_SINGLE_DECL(rt5680_da_mono2l_asrc_enum, RT5680_ASRC3,
+	RT5680_DA_FILTER_MONO2L_TRACK_SFT, rt5680_asrc_clk_source);
+
+static const SOC_ENUM_SINGLE_DECL(rt5680_da_mono2r_asrc_enum, RT5680_ASRC3,
+	RT5680_DA_FILTER_MONO2R_TRACK_SFT, rt5680_asrc_clk_source);
+
+static const SOC_ENUM_SINGLE_DECL(rt5680_da_mono3l_asrc_enum, RT5680_ASRC4,
+	RT5680_DA_FILTER_MONO3L_TRACK_SFT, rt5680_asrc_clk_source);
+
+static const SOC_ENUM_SINGLE_DECL(rt5680_da_mono3r_asrc_enum, RT5680_ASRC4,
+	RT5680_DA_FILTER_MONO3R_TRACK_SFT, rt5680_asrc_clk_source);
+
+static const SOC_ENUM_SINGLE_DECL(rt5680_ad_sto1_asrc_enum, RT5680_ASRC5,
+	RT5680_AD_FILTER_STEREO1_TRACK_SFT, rt5680_asrc_clk_source);
+
+static const SOC_ENUM_SINGLE_DECL(rt5680_ad_sto2_asrc_enum, RT5680_ASRC5,
+	RT5680_AD_FILTER_STEREO2_TRACK_SFT, rt5680_asrc_clk_source);
+
+static const SOC_ENUM_SINGLE_DECL(rt5680_ad_sto3_asrc_enum, RT5680_ASRC5,
+	RT5680_AD_FILTER_STEREO3_TRACK_SFT, rt5680_asrc_clk_source);
+
+static const SOC_ENUM_SINGLE_DECL(rt5680_ad_monol_asrc_enum, RT5680_ASRC6,
+	RT5680_AD_FILTER_MONOL_TRACK_SFT, rt5680_asrc_clk_source);
+
+static const SOC_ENUM_SINGLE_DECL(rt5680_ad_monor_asrc_enum, RT5680_ASRC6,
+	RT5680_AD_FILTER_MONOR_TRACK_SFT, rt5680_asrc_clk_source);
+
+static const SOC_ENUM_SINGLE_DECL(rt5680_ob_0_3_asrc_enum, RT5680_ASRC7,
+	RT5680_DSP_OUT_FS_SEC1_SFT, rt5680_asrc_clk_source);
+
+static const SOC_ENUM_SINGLE_DECL(rt5680_ob_4_7_asrc_enum, RT5680_ASRC7,
+	RT5680_DSP_OUT_FS_SEC2_SFT, rt5680_asrc_clk_source);
+
+static const char *rt5680_tdm1_adc_data[] = {
+	"1/2/3/4", "1/2/4/3", "1/3/2/4", "1/3/4/2", "1/4/3/2", "1/4/2/3",
+	"2/1/3/4", "2/1/4/3", "2/3/1/4", "2/3/4/1", "2/4/3/1", "2/4/1/3",
+	"3/1/2/4", "3/1/4/2", "3/2/1/4", "3/2/4/1", "3/4/2/1", "3/4/1/2",
+	"4/1/2/3", "4/1/3/2", "4/2/1/3", "4/2/3/1", "4/3/2/1", "4/3/1/2"
+};
+
+static const SOC_ENUM_SINGLE_DECL(rt5680_tdm1_adc_enum, RT5680_TDM1_CTRL3,
+	RT5680_SEL_RX_I2S1_SFT, rt5680_tdm1_adc_data);
+
+static const struct snd_kcontrol_new rt5680_snd_controls[] = {
+	/* DAC Digital Volume */
+	SOC_DOUBLE_TLV("DAC1 Playback Volume", RT5680_DAC1_DIG_VOL,
+			RT5680_L_VOL_SFT, RT5680_R_VOL_SFT,
+			175, 0, dac_vol_tlv),
+	SOC_DOUBLE_TLV("DAC2 Playback Volume", RT5680_DAC2_DIG_VOL,
+			RT5680_L_VOL_SFT, RT5680_R_VOL_SFT,
+			175, 0, dac_vol_tlv),
+	SOC_DOUBLE_TLV("DAC3 Playback Volume", RT5680_DAC3_DIG_VOL,
+			RT5680_L_VOL_SFT, RT5680_R_VOL_SFT,
+			175, 0, dac_vol_tlv),
+
+	/* IN Boost Control */
+	SOC_SINGLE_TLV("IN1 Capture Volume", RT5680_BST12_CTRL, RT5680_BST1_SFT,
+		69, 0, bst_tlv),
+	SOC_SINGLE_TLV("IN2 Capture Volume", RT5680_BST12_CTRL, RT5680_BST2_SFT,
+		69, 0, bst_tlv),
+	SOC_SINGLE_TLV("IN3 Capture Volume", RT5680_BST34_CTRL, RT5680_BST3_SFT,
+		69, 0, bst_tlv),
+	SOC_SINGLE_TLV("IN4 Capture Volume", RT5680_BST34_CTRL, RT5680_BST4_SFT,
+		69, 0, bst_tlv),
+
+	/* ADC Digital Volume Control */
+	SOC_DOUBLE("ADC1 Capture Switch", RT5680_STO1_ADC_DIG_VOL,
+		RT5680_L_MUTE_SFT, RT5680_R_MUTE_SFT, 1, 1),
+	SOC_DOUBLE("ADC2 Capture Switch", RT5680_STO2_ADC_DIG_VOL,
+		RT5680_L_MUTE_SFT, RT5680_R_MUTE_SFT, 1, 1),
+	SOC_DOUBLE("ADC3 Capture Switch", RT5680_STO3_ADC_DIG_VOL,
+		RT5680_L_MUTE_SFT, RT5680_R_MUTE_SFT, 1, 1),
+	SOC_DOUBLE("Mono ADC Capture Switch", RT5680_MONO_ADC_DIG_VOL,
+		RT5680_L_MUTE_SFT, RT5680_R_MUTE_SFT, 1, 1),
+
+	SOC_DOUBLE_TLV("ADC1 Capture Volume", RT5680_STO1_ADC_DIG_VOL,
+			RT5680_STO1_ADC_L_VOL_SFT, RT5680_STO1_ADC_R_VOL_SFT,
+			127, 0, adc_vol_tlv),
+	SOC_DOUBLE_TLV("ADC2 Capture Volume", RT5680_STO2_ADC_DIG_VOL,
+			RT5680_STO2_ADC_L_VOL_SFT, RT5680_STO2_ADC_R_VOL_SFT,
+			127, 0, adc_vol_tlv),
+	SOC_DOUBLE_TLV("ADC3 Capture Volume", RT5680_STO3_ADC_DIG_VOL,
+			RT5680_STO3_ADC_L_VOL_SFT, RT5680_STO3_ADC_R_VOL_SFT,
+			127, 0, adc_vol_tlv),
+	SOC_DOUBLE_TLV("Mono ADC Capture Volume", RT5680_MONO_ADC_DIG_VOL,
+			RT5680_MONO_ADC_L_VOL_SFT, RT5680_MONO_ADC_R_VOL_SFT,
+			127, 0, adc_vol_tlv),
+
+	/* ADC Boost Volume Control */
+	SOC_DOUBLE_TLV("STO1 ADC Boost Volume", RT5680_ADC_BST_GAIN_CTRL1,
+			RT5680_STO1_ADC_L_BST_SFT, RT5680_STO1_ADC_R_BST_SFT,
+			3, 0, adc_bst_tlv),
+	SOC_DOUBLE_TLV("STO2 ADC Boost Volume", RT5680_ADC_BST_GAIN_CTRL1,
+			RT5680_STO2_ADC_L_BST_SFT, RT5680_STO2_ADC_R_BST_SFT,
+			3, 0, adc_bst_tlv),
+	SOC_DOUBLE_TLV("STO3 ADC Boost Volume", RT5680_ADC_BST_GAIN_CTRL3,
+			RT5680_STO3_ADC_L_BST_SFT, RT5680_STO3_ADC_R_BST_SFT,
+			3, 0, adc_bst_tlv),
+	SOC_DOUBLE_TLV("Mono ADC Boost Volume", RT5680_ADC_BST_GAIN_CTRL2,
+			RT5680_MONO_ADC_L_BST_SFT, RT5680_MONO_ADC_R_BST_SFT,
+			3, 0, adc_bst_tlv),
+
+	SOC_ENUM("TDM1 ADC Data", rt5680_tdm1_adc_enum),
+};
+
+/* Stereo1-3/Mono DMIC controls */
+static const char *rt5680_dmic_select[] = {
+	"DMIC1", "DMIC2", "DMIC3", "DMIC4"
+};
+
+static const SOC_ENUM_SINGLE_DECL(
+	rt5680_stereo1_dmic_enum, RT5680_STO1_ADC_MIXER_CTRL,
+	RT5680_SEL_STO1_DMIC_SFT, rt5680_dmic_select);
+
+static const struct snd_kcontrol_new rt5680_stereo1_dmic_mux =
+	SOC_DAPM_ENUM("DMIC source", rt5680_stereo1_dmic_enum);
+
+static const SOC_ENUM_SINGLE_DECL(
+	rt5680_stereo2_dmic_enum, RT5680_STO2_ADC_MIXER_CTRL,
+	RT5680_SEL_STO2_DMIC_SFT, rt5680_dmic_select);
+
+static const struct snd_kcontrol_new rt5680_stereo2_dmic_mux =
+	SOC_DAPM_ENUM("DMIC source", rt5680_stereo2_dmic_enum);
+
+static const SOC_ENUM_SINGLE_DECL(
+	rt5680_stereo3_dmic_enum, RT5680_STO3_ADC_MIXER_CTRL,
+	RT5680_SEL_STO3_DMIC_SFT, rt5680_dmic_select);
+
+static const struct snd_kcontrol_new rt5680_stereo3_dmic_mux =
+	SOC_DAPM_ENUM("DMIC source", rt5680_stereo3_dmic_enum);
+
+static const SOC_ENUM_SINGLE_DECL(
+	rt5680_mono_l_dmic_enum, RT5680_MONO_ADC_MIXER_CTRL2,
+	RT5680_SEL_MONOL_DMIC_SFT, rt5680_dmic_select);
+
+static const struct snd_kcontrol_new rt5680_mono_l_dmic_mux =
+	SOC_DAPM_ENUM("DMIC source", rt5680_mono_l_dmic_enum);
+
+static const SOC_ENUM_SINGLE_DECL(
+	rt5680_mono_r_dmic_enum, RT5680_MONO_ADC_MIXER_CTRL2,
+	RT5680_SEL_MONOR_DMIC_SFT, rt5680_dmic_select);
+
+static const struct snd_kcontrol_new rt5680_mono_r_dmic_mux =
+	SOC_DAPM_ENUM("DMIC source", rt5680_mono_r_dmic_enum);
+
+/* Stereo 1-3 ADC controls */
+static const char *rt5680_stereo_adc2_src[] = {
+	"DMIC", "DD Mix"
+};
+
+static const SOC_ENUM_SINGLE_DECL(
+	rt5680_stereo1_adc2_enum, RT5680_STO1_ADC_MIXER_CTRL,
+	RT5680_SEL_STO1_ADC2_SFT, rt5680_stereo_adc2_src);
+
+static const struct snd_kcontrol_new rt5680_sto1_adc2_mux =
+	SOC_DAPM_ENUM("Stereo1 ADC2 Sel", rt5680_stereo1_adc2_enum);
+
+static const SOC_ENUM_SINGLE_DECL(
+	rt5680_stereo2_adc2_enum, RT5680_STO2_ADC_MIXER_CTRL,
+	RT5680_SEL_STO2_ADC2_SFT, rt5680_stereo_adc2_src);
+
+static const struct snd_kcontrol_new rt5680_sto2_adc2_mux =
+	SOC_DAPM_ENUM("Stereo2 ADC2 Sel", rt5680_stereo2_adc2_enum);
+
+static const SOC_ENUM_SINGLE_DECL(
+	rt5680_stereo3_adc2_enum, RT5680_STO3_ADC_MIXER_CTRL,
+	RT5680_SEL_STO3_ADC2_SFT, rt5680_stereo_adc2_src);
+
+static const struct snd_kcontrol_new rt5680_sto3_adc2_mux =
+	SOC_DAPM_ENUM("Stereo3 ADC2 Sel", rt5680_stereo3_adc2_enum);
+
+static const SOC_ENUM_SINGLE_DECL(
+	rt5680_mono_adc_l2_enum, RT5680_MONO_ADC_MIXER_CTRL1,
+	RT5680_SEL_MONO_ADC_L2_SFT, rt5680_stereo_adc2_src);
+
+static const struct snd_kcontrol_new rt5680_mono_adc_l2_mux =
+	SOC_DAPM_ENUM("Mono ADC L2 Sel", rt5680_mono_adc_l2_enum);
+
+static const SOC_ENUM_SINGLE_DECL(
+	rt5680_mono_adc_r2_enum, RT5680_MONO_ADC_MIXER_CTRL1,
+	RT5680_SEL_MONO_ADC_R2_SFT, rt5680_stereo_adc2_src);
+
+static const struct snd_kcontrol_new rt5680_mono_adc_r2_mux =
+	SOC_DAPM_ENUM("Mono ADC R2 Sel", rt5680_mono_adc_r2_enum);
+
+static const struct snd_kcontrol_new sto1_adcl_mix[] = {
+	SOC_DAPM_SINGLE("ADC L1 Switch", RT5680_STO1_ADC_MIXER_CTRL,
+		RT5680_M_STO1_ADC_L1_SFT, 1, 1),
+	SOC_DAPM_SINGLE("ADC L2 Switch", RT5680_STO1_ADC_MIXER_CTRL,
+		RT5680_M_STO1_ADC_L2_SFT, 1, 1),
+};
+
+static const struct snd_kcontrol_new sto1_adcr_mix[] = {
+	SOC_DAPM_SINGLE("ADC R1 Switch", RT5680_STO1_ADC_MIXER_CTRL,
+		RT5680_M_STO1_ADC_R1_SFT, 1, 1),
+	SOC_DAPM_SINGLE("ADC R2 Switch", RT5680_STO1_ADC_MIXER_CTRL,
+		RT5680_M_STO1_ADC_R2_SFT, 1, 1),
+};
+
+static const struct snd_kcontrol_new sto2_adcl_mix[] = {
+	SOC_DAPM_SINGLE("ADC L1 Switch", RT5680_STO2_ADC_MIXER_CTRL,
+		RT5680_M_STO2_ADC_L1_SFT, 1, 1),
+	SOC_DAPM_SINGLE("ADC L2 Switch", RT5680_STO2_ADC_MIXER_CTRL,
+		RT5680_M_STO2_ADC_L2_SFT, 1, 1),
+};
+
+static const struct snd_kcontrol_new sto2_adcr_mix[] = {
+	SOC_DAPM_SINGLE("ADC R1 Switch", RT5680_STO2_ADC_MIXER_CTRL,
+		RT5680_M_STO2_ADC_R1_SFT, 1, 1),
+	SOC_DAPM_SINGLE("ADC R2 Switch", RT5680_STO2_ADC_MIXER_CTRL,
+		RT5680_M_STO2_ADC_R2_SFT, 1, 1),
+};
+
+static const struct snd_kcontrol_new sto3_adcl_mix[] = {
+	SOC_DAPM_SINGLE("ADC L1 Switch", RT5680_STO3_ADC_MIXER_CTRL,
+		RT5680_M_STO3_ADC_L1_SFT, 1, 1),
+	SOC_DAPM_SINGLE("ADC L2 Switch", RT5680_STO3_ADC_MIXER_CTRL,
+		RT5680_M_STO3_ADC_L2_SFT, 1, 1),
+};
+
+static const struct snd_kcontrol_new sto3_adcr_mix[] = {
+	SOC_DAPM_SINGLE("ADC R1 Switch", RT5680_STO3_ADC_MIXER_CTRL,
+		RT5680_M_STO3_ADC_R1_SFT, 1, 1),
+	SOC_DAPM_SINGLE("ADC R2 Switch", RT5680_STO3_ADC_MIXER_CTRL,
+		RT5680_M_STO3_ADC_R2_SFT, 1, 1),
+};
+
+static const struct snd_kcontrol_new mono_adcl_mix[] = {
+	SOC_DAPM_SINGLE("ADC L1 Switch", RT5680_MONO_ADC_MIXER_CTRL1,
+		RT5680_M_MONO_ADC_L1_SFT, 1, 1),
+	SOC_DAPM_SINGLE("ADC L2 Switch", RT5680_MONO_ADC_MIXER_CTRL1,
+		RT5680_M_MONO_ADC_L2_SFT, 1, 1),
+};
+
+static const struct snd_kcontrol_new mono_adcr_mix[] = {
+	SOC_DAPM_SINGLE("ADC R1 Switch", RT5680_MONO_ADC_MIXER_CTRL1,
+		RT5680_M_MONO_ADC_R1_SFT, 1, 1),
+	SOC_DAPM_SINGLE("ADC R2 Switch", RT5680_MONO_ADC_MIXER_CTRL1,
+		RT5680_M_MONO_ADC_R2_SFT, 1, 1),
+};
+
+/* IF1 ADC1 controls */
+static const char *rt5680_if1_adc1_src[] = {
+	"Stereo1_ADC", "OutBound0/1", "OutBound0/1_Mini", "VAD_ADC",
+	"IF2_DAC0/1", "IF3_DAC", "IF4_DAC", "IF5_DAC"
+};
+
+static const SOC_ENUM_SINGLE_DECL(
+	rt5680_if1_adc1_enum, RT5680_TDM1_CTRL3,
+	RT5680_SEL_I2S1_RX_ADC1_SFT, rt5680_if1_adc1_src);
+
+static const struct snd_kcontrol_new rt5680_if1_adc1_mux =
+	SOC_DAPM_ENUM("IF1 ADC1 Sel", rt5680_if1_adc1_enum);
+
+/* IF1 ADC2 controls */
+static const char *rt5680_if1_adc2_src[] = {
+	"Stereo2_ADC", "OutBound2/3"
+};
+
+static const SOC_ENUM_SINGLE_DECL(
+	rt5680_if1_adc2_enum, RT5680_TDM1_CTRL3,
+	RT5680_SEL_I2S1_RX_ADC2_SFT, rt5680_if1_adc2_src);
+
+static const struct snd_kcontrol_new rt5680_if1_adc2_mux =
+	SOC_DAPM_ENUM("IF1 ADC2 Sel", rt5680_if1_adc2_enum);
+
+/* IF2 ADC3 controls */
+static const char *rt5680_if2_adc3_src[] = {
+	"Mono_ADC", "OutBound4/5", "DAC1"
+};
+
+static const SOC_ENUM_SINGLE_DECL(
+	rt5680_if2_adc3_enum, RT5680_TDM1_CTRL3,
+	RT5680_SEL_I2S1_RX_ADC3_SFT, rt5680_if2_adc3_src);
+
+static const struct snd_kcontrol_new rt5680_if2_adc3_mux =
+	SOC_DAPM_ENUM("IF2 ADC3 Sel", rt5680_if2_adc3_enum);
+
+/* IF2 ADC4 controls */
+static const char *rt5680_if2_adc4_src[] = {
+	"Stereo3_ADC", "DACL1/R1", "OutBound6/7"
+};
+
+static const SOC_ENUM_SINGLE_DECL(
+	rt5680_if2_adc4_enum, RT5680_TDM2_CTRL3,
+	RT5680_SEL_I2S2_RX_ADC4_SFT, rt5680_if2_adc4_src);
+
+static const struct snd_kcontrol_new rt5680_if2_adc4_mux =
+	SOC_DAPM_ENUM("IF2 ADC4 Sel", rt5680_if2_adc4_enum);
+
+static const struct snd_soc_dapm_widget rt5680_dapm_widgets[] = {
+	/* Input Lines */
+	SND_SOC_DAPM_INPUT("DMIC L1"),
+	SND_SOC_DAPM_INPUT("DMIC R1"),
+	SND_SOC_DAPM_INPUT("DMIC L2"),
+	SND_SOC_DAPM_INPUT("DMIC R2"),
+	SND_SOC_DAPM_INPUT("DMIC L3"),
+	SND_SOC_DAPM_INPUT("DMIC R3"),
+	SND_SOC_DAPM_INPUT("DMIC L4"),
+	SND_SOC_DAPM_INPUT("DMIC R4"),
+
+	SND_SOC_DAPM_PGA("DMIC 1", SND_SOC_NOPM, 0, 0, NULL, 0),
+	SND_SOC_DAPM_PGA("DMIC 2", SND_SOC_NOPM, 0, 0, NULL, 0),
+	SND_SOC_DAPM_PGA("DMIC 3", SND_SOC_NOPM, 0, 0, NULL, 0),
+	SND_SOC_DAPM_PGA("DMIC 4", SND_SOC_NOPM, 0, 0, NULL, 0),
+
+	/* Audio Interface */
+	SND_SOC_DAPM_AIF_IN("AIF1RX", "AIF1 Playback", 0, SND_SOC_NOPM, 0, 0),
+	SND_SOC_DAPM_AIF_OUT("AIF1TX", "AIF1 Capture", 0, SND_SOC_NOPM, 0, 0),
+
+	SND_SOC_DAPM_MUX("IF1 ADC1", SND_SOC_NOPM, 0, 0, &rt5680_if1_adc1_mux),
+	SND_SOC_DAPM_MUX("IF1 ADC2", SND_SOC_NOPM, 0, 0, &rt5680_if1_adc2_mux),
+	SND_SOC_DAPM_MUX("IF2 ADC3", SND_SOC_NOPM, 0, 0, &rt5680_if2_adc3_mux),
+	SND_SOC_DAPM_MUX("IF2 ADC4", SND_SOC_NOPM, 0, 0, &rt5680_if2_adc4_mux),
+
+	/* Dmic 1-4 */
+	SND_SOC_DAPM_MUX("Sto1 DMIC Mux", SND_SOC_NOPM, 0, 0,
+		&rt5680_stereo1_dmic_mux),
+	SND_SOC_DAPM_MUX("Sto2 DMIC Mux", SND_SOC_NOPM, 0, 0,
+		&rt5680_stereo2_dmic_mux),
+	SND_SOC_DAPM_MUX("Sto3 DMIC Mux", SND_SOC_NOPM, 0, 0,
+		&rt5680_stereo3_dmic_mux),
+	SND_SOC_DAPM_MUX("Mono DMIC L Mux", SND_SOC_NOPM, 0, 0,
+		&rt5680_mono_l_dmic_mux),
+	SND_SOC_DAPM_MUX("Mono DMIC R Mux", SND_SOC_NOPM, 0, 0,
+		&rt5680_mono_r_dmic_mux),
+
+	/* stereo 1-3 adc, mono adc */
+	SND_SOC_DAPM_MUX("Stereo1 ADC L2 Mux", SND_SOC_NOPM, 0, 0,
+		&rt5680_sto1_adc2_mux),
+	SND_SOC_DAPM_MUX("Stereo1 ADC R2 Mux", SND_SOC_NOPM, 0, 0,
+		&rt5680_sto1_adc2_mux),
+	SND_SOC_DAPM_MUX("Stereo2 ADC L2 Mux", SND_SOC_NOPM, 0, 0,
+		&rt5680_sto2_adc2_mux),
+	SND_SOC_DAPM_MUX("Stereo2 ADC R2 Mux", SND_SOC_NOPM, 0, 0,
+		&rt5680_sto2_adc2_mux),
+	SND_SOC_DAPM_MUX("Stereo3 ADC L2 Mux", SND_SOC_NOPM, 0, 0,
+		&rt5680_sto3_adc2_mux),
+	SND_SOC_DAPM_MUX("Stereo3 ADC R2 Mux", SND_SOC_NOPM, 0, 0,
+		&rt5680_sto3_adc2_mux),
+	SND_SOC_DAPM_MUX("Mono ADC L2 Mux", SND_SOC_NOPM, 0, 0,
+		&rt5680_mono_adc_l2_mux),
+	SND_SOC_DAPM_MUX("Mono ADC R2 Mux", SND_SOC_NOPM, 0, 0,
+		&rt5680_mono_adc_r2_mux),
+
+	SND_SOC_DAPM_MIXER("Stereo1 ADC MIXL", SND_SOC_NOPM, 0, 0,
+		sto1_adcl_mix, ARRAY_SIZE(sto1_adcl_mix)),
+	SND_SOC_DAPM_MIXER("Stereo1 ADC MIXR", SND_SOC_NOPM, 0, 0,
+		sto1_adcr_mix, ARRAY_SIZE(sto1_adcr_mix)),
+	SND_SOC_DAPM_MIXER("Stereo2 ADC MIXL", SND_SOC_NOPM, 0, 0,
+		sto2_adcl_mix, ARRAY_SIZE(sto2_adcl_mix)),
+	SND_SOC_DAPM_MIXER("Stereo2 ADC MIXR", SND_SOC_NOPM, 0, 0,
+		sto2_adcr_mix, ARRAY_SIZE(sto2_adcr_mix)),
+	SND_SOC_DAPM_MIXER("Stereo3 ADC MIXL", SND_SOC_NOPM, 0, 0,
+		sto3_adcl_mix, ARRAY_SIZE(sto3_adcl_mix)),
+	SND_SOC_DAPM_MIXER("Stereo3 ADC MIXR", SND_SOC_NOPM, 0, 0,
+		sto3_adcr_mix, ARRAY_SIZE(sto3_adcr_mix)),
+	SND_SOC_DAPM_MIXER("Mono ADC MIXL", SND_SOC_NOPM, 0, 0,
+		mono_adcl_mix, ARRAY_SIZE(mono_adcl_mix)),
+	SND_SOC_DAPM_MIXER("Mono ADC MIXR", SND_SOC_NOPM, 0, 0,
+		mono_adcr_mix, ARRAY_SIZE(mono_adcr_mix)),
+
+	/* Supply */
+	SND_SOC_DAPM_SUPPLY("I2S1", RT5680_PWR_DIG1,
+		RT5680_PWR_I2S1_BIT, 0, NULL, 0),
+	SND_SOC_DAPM_SUPPLY("Stereo1 ADC filter", RT5680_PWR_DIG2,
+		RT5680_PWR_ADC_S1F_BIT, 0, NULL, 0),
+	SND_SOC_DAPM_SUPPLY("Stereo2 ADC filter", RT5680_PWR_DIG2,
+		RT5680_PWR_ADC_S2F_BIT, 0, NULL, 0),
+	SND_SOC_DAPM_SUPPLY("Stereo3 ADC filter", RT5680_PWR_DIG2,
+		RT5680_PWR_ADC_S3F_BIT, 0, NULL, 0),
+	SND_SOC_DAPM_SUPPLY("Mono L ADC filter", RT5680_PWR_DIG2,
+		RT5680_PWR_ADC_MF_L_BIT, 0, NULL, 0),
+	SND_SOC_DAPM_SUPPLY("Mono R ADC filter", RT5680_PWR_DIG2,
+		RT5680_PWR_ADC_MF_R_BIT, 0, NULL, 0),
+
+	/* Output Lines */
+	SND_SOC_DAPM_OUTPUT("OUT"),
+};
+
+static const struct snd_soc_dapm_route rt5680_dapm_routes[] = {
+	{"OUT", NULL, "AIF1RX"},
+
+	{"DMIC 1", NULL, "DMIC L1"},
+	{"DMIC 1", NULL, "DMIC R1"},
+	{"DMIC 2", NULL, "DMIC L2"},
+	{"DMIC 2", NULL, "DMIC R2"},
+	{"DMIC 3", NULL, "DMIC L3"},
+	{"DMIC 3", NULL, "DMIC R3"},
+	{"DMIC 4", NULL, "DMIC L4"},
+	{"DMIC 4", NULL, "DMIC R4"},
+
+	{"Sto1 DMIC Mux", "DMIC1", "DMIC 1"},
+	{"Sto1 DMIC Mux", "DMIC2", "DMIC 2"},
+	{"Sto1 DMIC Mux", "DMIC3", "DMIC 3"},
+	{"Sto1 DMIC Mux", "DMIC4", "DMIC 4"},
+
+	{"Sto2 DMIC Mux", "DMIC1", "DMIC 1"},
+	{"Sto2 DMIC Mux", "DMIC2", "DMIC 2"},
+	{"Sto2 DMIC Mux", "DMIC3", "DMIC 3"},
+	{"Sto2 DMIC Mux", "DMIC4", "DMIC 4"},
+
+	{"Sto3 DMIC Mux", "DMIC1", "DMIC 1"},
+	{"Sto3 DMIC Mux", "DMIC2", "DMIC 2"},
+	{"Sto3 DMIC Mux", "DMIC3", "DMIC 3"},
+	{"Sto3 DMIC Mux", "DMIC4", "DMIC 4"},
+
+	{"Mono DMIC L Mux", "DMIC1", "DMIC L1"},
+	{"Mono DMIC R Mux", "DMIC1", "DMIC R1"},
+	{"Mono DMIC L Mux", "DMIC2", "DMIC L2"},
+	{"Mono DMIC R Mux", "DMIC2", "DMIC R2"},
+	{"Mono DMIC L Mux", "DMIC3", "DMIC L3"},
+	{"Mono DMIC R Mux", "DMIC3", "DMIC R3"},
+	{"Mono DMIC L Mux", "DMIC4", "DMIC L4"},
+	{"Mono DMIC R Mux", "DMIC4", "DMIC R4"},
+
+	{"Stereo1 ADC L2 Mux", "DMIC", "Sto1 DMIC Mux"},
+	{"Stereo1 ADC R2 Mux", "DMIC", "Sto1 DMIC Mux"},
+	{"Stereo2 ADC L2 Mux", "DMIC", "Sto2 DMIC Mux"},
+	{"Stereo2 ADC R2 Mux", "DMIC", "Sto2 DMIC Mux"},
+	{"Stereo3 ADC L2 Mux", "DMIC", "Sto3 DMIC Mux"},
+	{"Stereo3 ADC R2 Mux", "DMIC", "Sto3 DMIC Mux"},
+	{"Mono ADC L2 Mux", "DMIC", "Mono DMIC L Mux"},
+	{"Mono ADC R2 Mux", "DMIC", "Mono DMIC R Mux"},
+
+	{"Stereo1 ADC MIXL", "ADC L2 Switch", "Stereo1 ADC L2 Mux"},
+	{"Stereo1 ADC MIXR", "ADC R2 Switch", "Stereo1 ADC R2 Mux"},
+	{"Stereo2 ADC MIXL", "ADC L2 Switch", "Stereo2 ADC L2 Mux"},
+	{"Stereo2 ADC MIXR", "ADC R2 Switch", "Stereo2 ADC R2 Mux"},
+	{"Stereo3 ADC MIXL", "ADC L2 Switch", "Stereo3 ADC L2 Mux"},
+	{"Stereo3 ADC MIXR", "ADC R2 Switch", "Stereo3 ADC R2 Mux"},
+	{"Mono ADC MIXL", "ADC L2 Switch", "Mono ADC L2 Mux"},
+	{"Mono ADC MIXR", "ADC R2 Switch", "Mono ADC R2 Mux"},
+	{"Stereo1 ADC MIXL", NULL, "Stereo1 ADC filter"},
+	{"Stereo2 ADC MIXL", NULL, "Stereo2 ADC filter"},
+	{"Stereo3 ADC MIXL", NULL, "Stereo3 ADC filter"},
+	{"Mono ADC MIXL", NULL, "Mono L ADC filter"},
+	{"Mono ADC MIXR", NULL, "Mono R ADC filter"},
+
+	{"IF1 ADC1", "Stereo1_ADC", "Stereo1 ADC MIXL"},
+	{"IF1 ADC1", "Stereo1_ADC", "Stereo1 ADC MIXR"},
+	{"IF1 ADC2", "Stereo2_ADC", "Stereo2 ADC MIXL"},
+	{"IF1 ADC2", "Stereo2_ADC", "Stereo2 ADC MIXR"},
+	{"IF2 ADC3", "Mono_ADC", "Mono ADC MIXL"},
+	{"IF2 ADC3", "Mono_ADC", "Mono ADC MIXR"},
+	{"IF2 ADC4", "Stereo3_ADC", "Stereo3 ADC MIXL"},
+	{"IF2 ADC4", "Stereo3_ADC", "Stereo3 ADC MIXR"},
+
+	{"AIF1TX", NULL, "IF1 ADC1"},
+	{"AIF1TX", NULL, "IF1 ADC2"},
+	{"AIF1TX", NULL, "IF2 ADC3"},
+	{"AIF1TX", NULL, "IF2 ADC4"},
+	{"AIF1TX", NULL, "I2S1"},
+};
+
+static int rt5680_hw_params(struct snd_pcm_substream *substream,
+	struct snd_pcm_hw_params *params, struct snd_soc_dai *dai)
+{
+
+	return 0;
+}
+
+static int rt5680_set_tdm_slot(struct snd_soc_dai *dai, unsigned int tx_mask,
+			unsigned int rx_mask, int slots, int slot_width)
+{
+	struct snd_soc_codec *codec = dai->codec;
+	unsigned int val = 0;
+
+	if (rx_mask || tx_mask)
+		val |= RT5680_TDM_TDM_MODE;
+
+	switch (slots) {
+	case 4:
+		val |= RT5680_TDM_IN_SLOT_SEL_4CH;
+		val |= RT5680_TDM_OUT_SLOT_SEL_4CH;
+		break;
+	case 6:
+		val |= RT5680_TDM_IN_SLOT_SEL_6CH;
+		val |= RT5680_TDM_OUT_SLOT_SEL_6CH;
+		break;
+	case 8:
+		val |= RT5680_TDM_IN_SLOT_SEL_8CH;
+		val |= RT5680_TDM_OUT_SLOT_SEL_8CH;
+		break;
+	case 2:
+	default:
+		break;
+	}
+
+	switch (slot_width) {
+	case 20:
+		val |= (RT5680_TDM_IN_LEN_20 | RT5680_TDM_OUT_LEN_20);
+		break;
+	case 24:
+		val |= (RT5680_TDM_IN_LEN_24 | RT5680_TDM_OUT_LEN_24);
+		break;
+	case 32:
+		val |= (RT5680_TDM_IN_LEN_32 | RT5680_TDM_OUT_LEN_32);
+		break;
+	case 16:
+	default:
+		break;
+	}
+
+	snd_soc_update_bits(codec, RT5680_TDM1_CTRL1,
+			RT5680_TDM_TDM_MODE |
+			RT5680_TDM_IN_SLOT_SEL_MASK |
+			RT5680_TDM_OUT_SLOT_SEL_MASK |
+			RT5680_TDM_IN_LEN_MASK |
+			RT5680_TDM_OUT_LEN_MASK,
+			val);
+
+	return 0;
+}
+
+static ssize_t rt5680_codec_show_range(struct rt5680_priv *rt5680,
+	char *buf, int start, int end)
+{
+	unsigned int val;
+	int cnt = 0, i;
+
+	for (i = start; i <= end; i++) {
+		if (cnt + RT5680_REG_DISP_LEN >= PAGE_SIZE)
+			break;
+
+		if (rt5680_readable_register(NULL, i)) {
+			regmap_read(rt5680->regmap, i, &val);
+
+			cnt += snprintf(buf + cnt, RT5680_REG_DISP_LEN,
+					"%04x: %04x\n", i, val);
+		}
+	}
+
+	if (cnt >= PAGE_SIZE)
+		cnt = PAGE_SIZE - 1;
+
+	return cnt;
+}
+
+static ssize_t rt5680_codec_show(struct device *dev,
+	struct device_attribute *attr, char *buf)
+{
+	struct i2c_client *client = to_i2c_client(dev);
+	struct rt5680_priv *rt5680 = i2c_get_clientdata(client);
+
+	return rt5680_codec_show_range(rt5680, buf, rt5680->reg_page << 8,
+		(rt5680->reg_page << 8) | 0xff);
+}
+
+static ssize_t rt5680_codec_store(struct device *dev,
+	struct device_attribute *attr, const char *buf, size_t count)
+{
+	struct i2c_client *client = to_i2c_client(dev);
+	struct rt5680_priv *rt5680 = i2c_get_clientdata(client);
+	unsigned int val = 0, addr = 0;
+	int i;
+
+	if (buf[0] == 'P' || buf[0] == 'p') {
+		rt5680->reg_page = buf[1] - '0';
+		return count;
+	}
+
+	pr_info("register \"%s\" count = %zu\n", buf, count);
+	for (i = 0; i < count; i++) {
+		if (*(buf + i) <= '9' && *(buf + i) >= '0')
+			addr = (addr << 4) | (*(buf + i) - '0');
+		else if (*(buf + i) <= 'f' && *(buf + i) >= 'a')
+			addr = (addr << 4) | ((*(buf + i) - 'a') + 0xa);
+		else if (*(buf + i) <= 'F' && *(buf + i) >= 'A')
+			addr = (addr << 4) | ((*(buf + i)-'A') + 0xa);
+		else
+			break;
+	}
+
+	for (i = i + 1; i < count; i++) {
+		if (*(buf + i) <= '9' && *(buf + i) >= '0')
+			val = (val << 4) | (*(buf + i) - '0');
+		else if (*(buf + i) <= 'f' && *(buf + i) >= 'a')
+			val = (val << 4) | ((*(buf + i) - 'a') + 0xa);
+		else if (*(buf + i) <= 'F' && *(buf + i) >= 'A')
+			val = (val << 4) | ((*(buf + i) - 'A') + 0xa);
+		else
+			break;
+	}
+
+	pr_info("addr = 0x%04x val = 0x%04x\n", addr, val);
+	if (addr > RT5680_DUMMY_REG_4 || val > 0xffff || val < 0)
+		return count;
+
+	if (i == count) {
+		regmap_read(rt5680->regmap, addr, &val);
+		pr_info("0x%04x = 0x%04x\n", addr, val);
+	} else
+		regmap_write(rt5680->regmap, addr, val);
+
+	return count;
+}
+static DEVICE_ATTR(codec_reg, 0644, rt5680_codec_show, rt5680_codec_store);
+
+static ssize_t rt5680_is_dsp_mode_show(struct device *dev,
+	struct device_attribute *attr, char *buf)
+{
+	struct i2c_client *client = to_i2c_client(dev);
+	struct rt5680_priv *rt5680 = i2c_get_clientdata(client);
+
+	return snprintf(buf, 3, "%c\n", rt5680->is_dsp_mode ? 'Y' : 'N');
+}
+static DEVICE_ATTR(is_dsp_mode, 0444, rt5680_is_dsp_mode_show, NULL);
+
+static ssize_t rt5680_codec_adb_show(struct device *dev,
+	struct device_attribute *attr, char *buf)
+{
+	struct i2c_client *client = to_i2c_client(dev);
+	struct rt5680_priv *rt5680 = i2c_get_clientdata(client);
+	struct snd_soc_codec *codec = rt5680->codec;
+	unsigned int val;
+	int cnt = 0, i;
+
+	for (i = 0; i < rt5680->adb_reg_num; i++) {
+		if (cnt + RT5680_REG_DISP_LEN >= PAGE_SIZE)
+			break;
+		val = snd_soc_read(codec, rt5680->adb_reg_addr[i]);
+		cnt += snprintf(buf + cnt, RT5680_REG_DISP_LEN, "%04x: %04x\n",
+			rt5680->adb_reg_addr[i], val);
+	}
+
+	return cnt;
+}
+
+static ssize_t rt5680_codec_adb_store(struct device *dev,
+	struct device_attribute *attr, const char *buf, size_t count)
+{
+	struct i2c_client *client = to_i2c_client(dev);
+	struct rt5680_priv *rt5680 = i2c_get_clientdata(client);
+	struct snd_soc_codec *codec = rt5680->codec;
+	unsigned int value = 0;
+	int i = 2, j = 0;
+
+	if (buf[0] == 'R' || buf[0] == 'r') {
+		while (j <= 0x100 && i < count) {
+			rt5680->adb_reg_addr[j] = 0;
+			value = 0;
+			for ( ; i < count; i++) {
+				if (*(buf + i) <= '9' && *(buf + i) >= '0')
+					value = (value << 4) | (*(buf + i) - '0');
+				else if (*(buf + i) <= 'f' && *(buf + i) >= 'a')
+					value = (value << 4) | ((*(buf + i) - 'a')+0xa);
+				else if (*(buf + i) <= 'F' && *(buf + i) >= 'A')
+					value = (value << 4) | ((*(buf + i) - 'A')+0xa);
+				else
+					break;
+			}
+			i++;
+
+			rt5680->adb_reg_addr[j] = value;
+			j++;
+		}
+		rt5680->adb_reg_num = j;
+	} else if (buf[0] == 'W' || buf[0] == 'w') {
+		while (j <= 0x100 && i < count) {
+			/* Get address */
+			rt5680->adb_reg_addr[j] = 0;
+			value = 0;
+			for ( ; i < count; i++) {
+				if (*(buf + i) <= '9' && *(buf + i) >= '0')
+					value = (value << 4) | (*(buf + i) - '0');
+				else if (*(buf + i) <= 'f' && *(buf + i) >= 'a')
+					value = (value << 4) | ((*(buf + i) - 'a')+0xa);
+				else if (*(buf + i) <= 'F' && *(buf + i) >= 'A')
+					value = (value << 4) | ((*(buf + i) - 'A')+0xa);
+				else
+					break;
+			}
+			i++;
+			rt5680->adb_reg_addr[j] = value;
+
+			/* Get value */
+			rt5680->adb_reg_value[j] = 0;
+			value = 0;
+			for ( ; i < count; i++) {
+				if (*(buf + i) <= '9' && *(buf + i) >= '0')
+					value = (value << 4) | (*(buf + i) - '0');
+				else if (*(buf + i) <= 'f' && *(buf + i) >= 'a')
+					value = (value << 4) | ((*(buf + i) - 'a')+0xa);
+				else if (*(buf + i) <= 'F' && *(buf + i) >= 'A')
+					value = (value << 4) | ((*(buf + i) - 'A')+0xa);
+				else
+					break;
+			}
+			i++;
+			rt5680->adb_reg_value[j] = value;
+
+			j++;
+		}
+
+		rt5680->adb_reg_num = j;
+
+		for (i = 0; i < rt5680->adb_reg_num; i++) {
+			snd_soc_write(codec,
+				rt5680->adb_reg_addr[i] & 0xffff,
+				rt5680->adb_reg_value[i]);
+		}
+
+	}
+
+	return count;
+}
+
+static DEVICE_ATTR(codec_reg_adb, 0664, rt5680_codec_adb_show,
+			rt5680_codec_adb_store);
+
+static int rt5680_set_bias_level(struct snd_soc_codec *codec,
+			enum snd_soc_bias_level level)
+{
+	switch (level) {
+	case SND_SOC_BIAS_ON:
+		break;
+
+	case SND_SOC_BIAS_PREPARE:
+		if (SND_SOC_BIAS_STANDBY == snd_soc_codec_get_bias_level(codec)) {
+			snd_soc_update_bits(codec, RT5680_PWR_ANA1,
+				RT5680_PWR_VREF1 | RT5680_PWR_MB |
+				RT5680_PWR_VREF2 | RT5680_PWR_VREF4,
+				RT5680_PWR_VREF1 | RT5680_PWR_MB |
+				RT5680_PWR_VREF2 | RT5680_PWR_VREF4);
+			mdelay(10);
+			snd_soc_update_bits(codec, RT5680_PWR_ANA1,
+				RT5680_PWR_FV1 | RT5680_PWR_FV2 |
+				RT5680_PWR_FV4,
+				RT5680_PWR_FV1 | RT5680_PWR_FV2 |
+				RT5680_PWR_FV4);
+		}
+		break;
+
+	case SND_SOC_BIAS_STANDBY:
+		break;
+
+	case SND_SOC_BIAS_OFF:
+		break;
+
+	default:
+		break;
+	}
+
+	return 0;
+}
+
+static int rt5680_probe(struct snd_soc_codec *codec)
+{
+	struct rt5680_priv *rt5680 = snd_soc_codec_get_drvdata(codec);
+	int ret;
+
+	pr_info("Codec driver version %s\n", VERSION);
+
+	rt5680->codec = codec;
+
+	ret = device_create_file(codec->dev, &dev_attr_codec_reg);
+	if (ret != 0) {
+		dev_err(codec->dev,
+			"Failed to create codec_reg sysfs files: %d\n", ret);
+		return ret;
+	}
+
+	ret = device_create_file(codec->dev, &dev_attr_codec_reg_adb);
+	if (ret != 0) {
+		dev_err(codec->dev,
+			"Failed to create codec_reg_adb sysfs files: %d\n", ret);
+		return ret;
+	}
+
+	ret = device_create_file(codec->dev, &dev_attr_is_dsp_mode);
+	if (ret != 0) {
+		dev_err(codec->dev,
+			"Failed to create is_dsp_mode sysfs files: %d\n", ret);
+		return ret;
+	}
+
+	return 0;
+}
+
+static int rt5680_remove(struct snd_soc_codec *codec)
+{
+	device_remove_file(codec->dev, &dev_attr_codec_reg);
+	device_remove_file(codec->dev, &dev_attr_codec_reg_adb);
+	device_remove_file(codec->dev, &dev_attr_is_dsp_mode);
+
+	return 0;
+}
+
+#ifdef CONFIG_PM
+static int rt5680_suspend(struct snd_soc_codec *codec)
+{
+	return 0;
+}
+
+static int rt5680_resume(struct snd_soc_codec *codec)
+{
+	return 0;
+}
+#else
+#define rt5680_suspend NULL
+#define rt5680_resume NULL
+#endif
+
+static int rt5680_i2c_read(void *context, unsigned int reg, unsigned int *val)
+{
+	struct i2c_client *client = context;
+	struct rt5680_priv *rt5680 = i2c_get_clientdata(client);
+
+	if (rt5680->is_dsp_mode)
+		rt5680_dsp_mode_i2c_read(rt5680, reg, val);
+	else
+		regmap_read(rt5680->regmap_physical, reg, val);
+
+	return 0;
+}
+
+static int rt5680_i2c_write(void *context, unsigned int reg, unsigned int val)
+{
+	struct i2c_client *client = context;
+	struct rt5680_priv *rt5680 = i2c_get_clientdata(client);
+
+	if (rt5680->is_dsp_mode)
+		rt5680_dsp_mode_i2c_write(rt5680, reg, val);
+	else
+		regmap_write(rt5680->regmap_physical, reg, val);
+
+	return 0;
+}
+
+#define RT5680_STEREO_RATES SNDRV_PCM_RATE_8000_192000
+#define RT5680_FORMATS (SNDRV_PCM_FMTBIT_S16_LE | SNDRV_PCM_FMTBIT_S20_3LE | \
+			SNDRV_PCM_FMTBIT_S24_LE | SNDRV_PCM_FMTBIT_S8)
+
+struct snd_soc_dai_ops rt5680_aif_dai_ops = {
+	.hw_params = rt5680_hw_params,
+	.set_tdm_slot = rt5680_set_tdm_slot,
+};
+
+struct snd_soc_dai_driver rt5680_dai[] = {
+	{
+		.name = "rt5680-aif1",
+		.id = RT5680_AIF1,
+		.playback = {
+			.stream_name = "AIF1 Playback",
+			.channels_min = 1,
+			.channels_max = 8,
+			.rates = RT5680_STEREO_RATES,
+			.formats = RT5680_FORMATS,
+		},
+		.capture = {
+			.stream_name = "AIF1 Capture",
+			.channels_min = 1,
+			.channels_max = 8,
+			.rates = RT5680_STEREO_RATES,
+			.formats = RT5680_FORMATS,
+		},
+		.ops = &rt5680_aif_dai_ops,
+	},
+};
+
+static struct snd_soc_codec_driver soc_codec_dev_rt5680 = {
+	.probe = rt5680_probe,
+	.remove = rt5680_remove,
+	.suspend = rt5680_suspend,
+	.resume = rt5680_resume,
+	.set_bias_level = rt5680_set_bias_level,
+	.component_driver = {
+		.controls		= rt5680_snd_controls,
+		.num_controls		= ARRAY_SIZE(rt5680_snd_controls),
+		.dapm_widgets		= rt5680_dapm_widgets,
+		.num_dapm_widgets	= ARRAY_SIZE(rt5680_dapm_widgets),
+		.dapm_routes		= rt5680_dapm_routes,
+		.num_dapm_routes	= ARRAY_SIZE(rt5680_dapm_routes),
+	},
+};
+
+static const struct regmap_config rt5680_regmap_physical = {
+	.name = "physical",
+	.reg_bits = 16,
+	.val_bits = 16,
+
+	.max_register = RT5680_DUMMY_REG_4,
+	.readable_reg = rt5680_readable_register,
+
+	.cache_type = REGCACHE_NONE,
+};
+
+static const struct regmap_config rt5680_regmap = {
+	.reg_bits = 16,
+	.val_bits = 16,
+
+	.max_register = RT5680_DUMMY_REG_4,
+	.volatile_reg = rt5680_volatile_register,
+	.readable_reg = rt5680_readable_register,
+	.reg_read = rt5680_i2c_read,
+	.reg_write = rt5680_i2c_write,
+
+	.cache_type = REGCACHE_NONE,
+	.reg_defaults = rt5680_reg,
+	.num_reg_defaults = ARRAY_SIZE(rt5680_reg),
+};
+
+static const struct i2c_device_id rt5680_i2c_id[] = {
+	{ "rt5680", RT5680 },
+	{ }
+};
+MODULE_DEVICE_TABLE(i2c, rt5680_i2c_id);
+
+#if defined(CONFIG_OF)
+static const struct of_device_id rt5680_of_match[] = {
+	{ .compatible = "realtek,rt5680", },
+	{},
+};
+MODULE_DEVICE_TABLE(of, rt5680_of_match);
+#endif
+
+/* Audio add for nv board device tree */
+static int rt5680_enable_power(struct device *dev, struct device_node *np)
+{
+	/* For CODEC_AVDD_1V8_EN */
+	int codec_power_enable_gpio = -1;
+	/* For CODEC_PA_DVDD_1V8_EN */
+	int codec_pa_power_enable_gpio = -1;
+
+	/* For CODEC_AVDD_1V8_EN */
+	codec_power_enable_gpio = of_get_named_gpio(np, "codec-1v8-enable-gpio", 0);
+	if (codec_power_enable_gpio < 0) {
+		dev_err(dev, "%s: no codec gpio provided!\n", __func__);
+		return -1;
+	} else {
+		dev_info(dev, "%s: codec power gpio provided ok, gpio:%d\n", __func__, codec_power_enable_gpio);
+	}
+	gpio_direction_output(codec_power_enable_gpio, 1);
+	gpio_set_value_cansleep(codec_power_enable_gpio, 1);
+
+	/* For CODEC_PA_DVDD_1V8_EN */
+	codec_pa_power_enable_gpio = of_get_named_gpio(np, "codec-pa-1v8-enable-gpio", 0);
+	if (codec_pa_power_enable_gpio < 0) {
+	dev_err(dev, "%s: no codec pa gpio provided!\n", __func__);
+	return -1;
+	} else {
+		dev_info(dev, "%s: codec pa power gpio provided ok, gpio:%d\n", __func__, codec_pa_power_enable_gpio);
+	}
+	gpio_direction_output(codec_pa_power_enable_gpio, 1);
+	gpio_set_value_cansleep(codec_pa_power_enable_gpio, 1);
+
+	return 0;
+}
+
+static int rt5680_i2c_probe(struct i2c_client *i2c,
+		    const struct i2c_device_id *id)
+{
+	struct rt5680_priv *rt5680;
+	struct device_node *np = i2c->dev.of_node;
+	int ret;
+
+	dev_info(&i2c->dev, "%s: Enter rt5680_i2c_probe()\n", __func__);
+
+	rt5680 = devm_kzalloc(&i2c->dev, sizeof(struct rt5680_priv),
+				GFP_KERNEL);
+	if (rt5680 == NULL)
+		return -ENOMEM;
+
+	i2c_set_clientdata(i2c, rt5680);
+
+	/* rt5680 1.8v enable pin */
+	if (np) {
+		ret = rt5680_enable_power(&i2c->dev, np);
+		if (ret) {
+			dev_err(&i2c->dev, "%s: Failed to parse device tree node\n", __func__);
+			return -EIO;
+		}
+	}
+	/* Wait for power supply stable */
+	dev_info(&i2c->dev, "%s: Delay 200ms\n", __func__);
+	msleep(2*100);
+
+	rt5680->regmap_physical = devm_regmap_init_i2c(i2c,
+					&rt5680_regmap_physical);
+	if (IS_ERR(rt5680->regmap_physical)) {
+		ret = PTR_ERR(rt5680->regmap_physical);
+		dev_err(&i2c->dev, "Failed to allocate register map: %d\n",
+			ret);
+		return ret;
+	}
+
+	rt5680->regmap = devm_regmap_init(&i2c->dev, NULL, i2c, &rt5680_regmap);
+	if (IS_ERR(rt5680->regmap)) {
+		ret = PTR_ERR(rt5680->regmap);
+		dev_err(&i2c->dev, "Failed to allocate register map: %d\n",
+			ret);
+		return ret;
+	}
+
+	rt5680->is_dsp_mode = false;
+
+	regmap_read(rt5680->regmap, RT5680_VENDOR_ID2, &ret);
+	dev_info(&i2c->dev, "%s:  RT5680_VENDOR_ID2 is [0x%x] \n", __func__, ret);
+	if (ret != RT5680_DEVICE_ID) {
+		dev_err(&i2c->dev,
+			"Device with ID register %x is not rt5680\n", ret);
+		return -ENODEV;
+	}
+	mutex_init(&rt5680->dsp_lock);
+
+	regmap_write(rt5680->regmap, RT5680_RESET, 0x10EC);
+
+	ret = regmap_multi_reg_write(rt5680->regmap, rt5680_init_list,
+				    ARRAY_SIZE(rt5680_init_list));
+	if (ret != 0)
+		dev_warn(&i2c->dev, "Failed to apply rt5680 reg init list: %d\n", ret);
+
+	ret = snd_soc_register_codec(&i2c->dev, &soc_codec_dev_rt5680,
+			rt5680_dai, ARRAY_SIZE(rt5680_dai));
+	if (ret == 0) {
+		dev_info(&i2c->dev, "%s: Sucess to register CODEC: ret=%d", __func__, ret);
+	} else {
+		dev_err(&i2c->dev, "%s: Failed to register CODEC: ret=%d\n",__func__, ret);
+	}
+
+	return ret;
+}
+
+static int rt5680_i2c_remove(struct i2c_client *i2c)
+{
+	snd_soc_unregister_codec(&i2c->dev);
+
+	return 0;
+}
+
+void rt5680_i2c_shutdown(struct i2c_client *client)
+{
+	struct rt5680_priv *rt5680 = i2c_get_clientdata(client);
+	struct snd_soc_codec *codec = rt5680->codec;
+
+	if (codec != NULL)
+		rt5680_set_bias_level(codec, SND_SOC_BIAS_OFF);
+}
+
+struct i2c_driver rt5680_i2c_driver = {
+	.driver = {
+		.name = "rt5680",
+#if defined(CONFIG_OF)
+		.of_match_table = rt5680_of_match,
+#endif
+	},
+	.probe = rt5680_i2c_probe,
+	.remove   = rt5680_i2c_remove,
+	.shutdown = rt5680_i2c_shutdown,
+	.id_table = rt5680_i2c_id,
+};
+module_i2c_driver(rt5680_i2c_driver);
+
+MODULE_DESCRIPTION("ASoC ALC5680 driver");
+MODULE_AUTHOR("Oder Chiou <oder_chiou@realtek.com>,Zhongxi Zhao <zhaozhongxi@xiaomi.com>");
+MODULE_LICENSE("GPL v2");

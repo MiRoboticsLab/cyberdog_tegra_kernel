@@ -1,0 +1,28 @@
+#include "tegra194-camera-ov13b10.dtsi"
+#include "dt-bindings/clock/tegra194-clock.h"
+
+#define	CAM1_PWDN	TEGRA194_MAIN_GPIO(P, 4)
+
+/{
+	gpio@2200000 {
+		camera-control-output-low {
+			gpio-hog;
+			output-low;
+			gpios = <CAM1_PWDN 0>;
+			label = "cam1-pwdn";
+		};
+	};
+
+	i2c@3180000 {
+		ov13b10@36 {
+			clocks = <&bpmp_clks TEGRA194_CLK_EXTPERIPH1>,
+				 <&bpmp_clks TEGRA194_CLK_PLLP_OUT0>;
+			clock-names = "extperiph1", "pllp_grtba";
+			mclk = "extperiph1";
+			clock-frequency = <19200000>;
+			pwdn-gpios = <&tegra_main_gpio CAM1_PWDN GPIO_ACTIVE_HIGH>;
+			vana-supply = <&avdd_cam1_2v8>;
+			vif-supply = <&iovdd_cam_1v8>;
+		};
+	};
+};

@@ -1,0 +1,91 @@
+/*
+ *
+ * Copyright (c) 2021 Beijing Xiaomi Mobile Software Co., Ltd. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; version 2 of the License.
+ *
+ * This program is distributed in the hope that it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
+ * more details.
+ */
+
+&tegra_axbar {
+	status = "okay";
+};
+&tegra_i2s5 {
+	status = "okay";
+};
+&tegra_sound {
+	status = "okay";
+	nvidia,audio-routing =
+			"x Headphone",          "x OUT",
+			"x IN",                 "x Mic",
+			"y Headphone",          "y OUT",
+			"y IN",                 "y Mic",
+			"z Headphone",          "z OUT",
+			"z IN",                 "z Mic",
+			"m Headphone",          "m OUT",
+			"m IN",                 "m Mic",
+			"n Headphone",          "n OUT",
+			"n IN",                 "n Mic",
+			"o Headphone",          "o OUT",
+			"o IN",                 "o Mic",
+			"a IN",                 "a Mic",
+			"b IN",                 "b Mic",
+			"c IN",                 "c Mic",
+			"d IN",                 "d Mic",
+			"d1 Headphone",         "d1 OUT",
+			"d2 Headphone",         "d2 OUT",
+			"h1 DMIC L1",		"h1 Int DMIC",
+			"h1 DMIC R1",		"h1 Int DMIC",
+			"h1 DMIC L2",		"h1 Int DMIC",
+			"h1 DMIC R2",		"h1 Int DMIC",
+			"h1 DMIC L3",		"h1 Int DMIC",
+			"h1 DMIC R3",		"h1 Int DMIC",
+			"h1 DMIC L4",		"h1 Int DMIC",
+			"h1 DMIC R4",		"h1 Int DMIC";
+
+	nvidia,dai-link-3 {
+			link-name = "rt5680-codec";
+			codec-dai = <&rt5680>;
+			codec-dai-name = "rt5680-aif1";
+			format = "dsp_a";
+			srate = <16000>;
+			num-channel = <6>;
+			fsync-width = <15>;
+			name-prefix = "h1";
+	};
+	nvidia,dai-link-5 {
+			link-name = "tas5805-codec";
+			cpu-dai = <&tegra_i2s5>;
+			codec-dai = <&tas5805m>;
+			cpu-dai-name = "I2S5";
+			codec-dai-name = "tas5805m-amplifier";
+			format = "i2s";
+			bit-format = "s16_le";
+			srate = <16000>;
+			num-channel = <1>;
+			ignore_suspend;
+			status = "okay";
+	};
+};
+
+&gen1_i2c {
+	tas5805m: tas5805m@2c {
+		compatible = "ti,tas5805m";
+		reg = <0x2c>;
+		pdn-enable-gpio = <&gpio_expand1 7 GPIO_ACTIVE_HIGH>;
+		pa-1v8-enable-gpio = <&gpio_expand2 18 GPIO_ACTIVE_HIGH>;
+		status = "okay";
+	};
+	rt5680: rt5680@2d {
+		compatible = "realtek,rt5680";
+		reg = <0x2d>;
+		codec-pa-1v8-enable-gpio = <&gpio_expand2 18 GPIO_ACTIVE_HIGH>;
+		codec-1v8-enable-gpio = <&gpio_expand2 19 GPIO_ACTIVE_HIGH>;
+		status = "okay";
+	};
+};
