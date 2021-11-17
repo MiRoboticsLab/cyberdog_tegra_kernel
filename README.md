@@ -12,7 +12,6 @@ cd到内核代码所在目录后并执行以下命令：
 ```
 git clone https://github.com/MiRoboticsLab/cyberdog_tegra_kernel.git
 cd cyberdog_tegra_kernel/kernel/kernel-4.9
-source envsetup.sh
 ./build.sh
 ```
 

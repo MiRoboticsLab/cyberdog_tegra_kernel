@@ -18,8 +18,9 @@ jobs:
       matrix:
         os: [ubuntu-20.04]
     steps:
-      - name: build
+      - name: Checkout
         uses: actions/checkout@v2
+      - name: Build
         run: |
           cd kernel/kernel-4.9
           source envsetup.sh

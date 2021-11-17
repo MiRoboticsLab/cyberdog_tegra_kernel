@@ -1,14 +1,17 @@
-#!/bin/bash
+#!/bin/sh
 
 CROSS_GCC_PATH=$HOME/buildtool/l4t_gcc
+COMPILER="l4t_gcc_7.3.1.tgz"
 cur_dir=$(pwd)
 
 if [ -d "${CROSS_GCC_PATH}" ]; then
-	echo "--ENV : cross gccis exist, env is ok"
+	echo "--ENV : cross gcc is exist, env is ok"
 else
 	echo "--ENV : cross gcc not exist ; now download cross tools";
-	wget http://releases.linaro.org/components/toolchain/binaries/7.3-2018.05/aarch64-linux-gnu/gcc-linaro-7.3.1-2018.05-x86_64_aarch64-linux-gnu.tar.xz -o gcc.tar.xz;
-	tar -xf gcc.tar.xz -C $HOME/buildtool/l4t_gcc
+	wget https://cdn.cnbj2m.fds.api.mi-img.com/cyberdog-package/build/${COMPILER}
+	mkdir -p $HOME/buildtool/l4t_gcc
+	tar -xf ${COMPILER} -C $HOME/buildtool/
+	ls $CROSS_GCC_PATH
 fi
 #set ENV
 export LOCALVERSION=-tegra
