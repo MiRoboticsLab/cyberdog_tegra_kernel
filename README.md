@@ -1,6 +1,7 @@
 # Tegra Linux Kernel for CyberDog
 
 [![License](https://img.shields.io/badge/License-GPL%202.0-brightgreen)](https://choosealicense.com/licenses/gpl-2.0/)
+[![CI](https://github.com/MiRoboticsLab/cyberdog_tegra_kernel/actions/workflows/ci_check.yaml/badge.svg)](https://github.com/MiRoboticsLab/cyberdog_tegra_kernel/actions/workflows/ci_check.yaml)
 
 ---
 ## **[简介]**
